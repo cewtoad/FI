@@ -24,8 +24,9 @@ DEFAULT_PORT = 20777
 # time would make mode switching impossible without restarting.
 PACKETS_ALL: Set[F1PacketType] = set(F1PacketType)
 
-# Named subsets, kept for reference / future per-mode parsing if we ever want
-# to save CPU. Currently the receiver uses PACKETS_ALL.
+# Named subsets, kept for reference / diagnostics. capture.py / capture_live.py
+# intentionally use PACKETS_ALL (they are debugging tools); the app entry
+# points (run.py, webui.py) feed the factory PACKETS_CONSUMED below.
 PACKETS_TIME_TRIAL: Set[F1PacketType] = {
     F1PacketType.SESSION,
     F1PacketType.LAP_DATA,
@@ -47,6 +48,25 @@ PACKETS_RACE: Set[F1PacketType] = PACKETS_TIME_TRIAL | {
     F1PacketType.TYRE_SETS,
     F1PacketType.FINAL_CLASSIFICATION,
     F1PacketType.LOBBY_INFO,
+}
+
+# The packet types TelemetryState._dispatch() actually has handlers for.
+# run.py / webui.py feed the factory this set, so unconsumed types (MOTION,
+# MOTION_EX, CAR_SETUPS, TYRE_SETS, FINAL_CLASSIFICATION, LOBBY_INFO,
+# LAP_POSITIONS) cost only a header parse before being dropped at the
+# factory's interested check instead of being fully parsed and thrown away.
+# Kept in sync with _dispatch by tests_packet_filter.py.
+PACKETS_CONSUMED: Set[F1PacketType] = {
+    F1PacketType.SESSION,
+    F1PacketType.LAP_DATA,
+    F1PacketType.EVENT,
+    F1PacketType.PARTICIPANTS,
+    F1PacketType.CAR_TELEMETRY,
+    F1PacketType.CAR_STATUS,
+    F1PacketType.CAR_DAMAGE,
+    F1PacketType.CAR_TELEMETRY_2,
+    F1PacketType.SESSION_HISTORY,
+    F1PacketType.TIME_TRIAL,
 }
 
 

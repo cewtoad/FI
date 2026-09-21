@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 
 from engineer import Engineer
-from receiver import DEFAULT_PORT, PACKETS_ALL, TelemetryReceiver
+from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from recorder import SessionRecorder
 from state import TelemetryState
 from summariser import Summariser
@@ -288,8 +288,10 @@ def _receiver_thread(state: TelemetryState, receiver: TelemetryReceiver, logger)
 def serve(port: int = 20777, web_port: int = 8765, logger: Optional[logging.Logger] = None) -> None:
     logger = logger or logging.getLogger("f1_tr.web")
     state = TelemetryState(error_logger=logger)
+    # Only the packet types TelemetryState consumes; the rest cost a header
+    # parse and are dropped (see receiver.PACKETS_CONSUMED).
     receiver = TelemetryReceiver(state, port=port, bind_ip="127.0.0.1",
-                                 interested=PACKETS_ALL, logger=logger)
+                                 interested=PACKETS_CONSUMED, logger=logger)
     engineer = Engineer()
 
     t = threading.Thread(target=_receiver_thread, args=(state, receiver, logger), daemon=True)

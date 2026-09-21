@@ -19,8 +19,7 @@ import sys
 from typing import Optional
 
 from console_ui import ConsoleUI
-from receiver import (DEFAULT_PORT, PACKETS_RACE, PACKETS_TIME_TRIAL,
-                      TelemetryReceiver)
+from receiver import (DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver)
 from state import TelemetryState
 from summariser import Summariser
 
@@ -52,7 +51,11 @@ async def _panel_loop(state: TelemetryState, receiver: TelemetryReceiver,
 async def _main(args: argparse.Namespace) -> None:
     logger = _setup_logging(args.verbose)
     state = TelemetryState(error_logger=logger)
-    interested = PACKETS_RACE if args.mode == "race" else PACKETS_TIME_TRIAL
+    # Every packet type TelemetryState consumes, regardless of --mode: the
+    # mode is a *reading* concern (ConsoleUI label), and both modes' needs are
+    # covered by the consumed set. Unconsumed types are dropped after a header
+    # parse only.
+    interested = PACKETS_CONSUMED
     receiver = TelemetryReceiver(
         state,
         port=args.port,

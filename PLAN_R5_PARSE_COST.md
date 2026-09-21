@@ -1,6 +1,10 @@
-# R5 方案：降低无消费包型的解析开销（仅方案，未实现）
+# R5 方案：降低无消费包型的解析开销
 
-> 状态：**待确认**。本文档只给方案与权衡，不含任何代码改动。
+> 状态：**已实现 Option A**（静态已消费集合白名单）+ README 20Hz 建议；
+> Option B（惰性解析）/ Option D（解析线程）维持否决，Option C（降频采样）后置。
+> 实施细节：`receiver.PACKETS_CONSUMED`（10 类），`run.py` / `webui.py` 改传该集合，
+> `capture*.py` 诊断工具保留 `PACKETS_ALL`；同步守护见 `tests_packet_filter.py`
+> （含"集合必须与 `_dispatch` 分支一致"的源码级断言）。基准数据见文末附录。
 > 背景：`CODE_REVIEW.md` BUG-5 —— web 模式使用 `PACKETS_ALL`，MOTION / MOTION_EX /
 > CAR_SETUPS / TYRE_SETS / FINAL_CLASSIFICATION / LOBBY_INFO / LAP_POSITIONS 共 7 类包
 > 被完整解析后在 `state._dispatch()` 中无分支直接丢弃。
@@ -79,3 +83,23 @@ Option C 的"用户侧把游戏内 UDP 频率调到 20Hz"作为零成本补充�
 - 微基准：对每类包 `factory.parse()` 各 N=10_000 次取均值（用 `fake_data` /
   手工构包），输出每包 µs 与 60Hz 下折算的单核占比。
 - 端到端：live 会话中对比 `receiver.stats()["accepted"]` 增速与进程 CPU%（任务管理器）。
+
+## 5. 附录：实施后的实测基准（2026-09-22，Python 3.11 / Linux 沙盒）
+
+方法：以 `fake_data.make_telemetry()`（22 车 CAR_TELEMETRY，1,352 字节，重解析器的
+代表）作代理，各 3,000 次取均值，比较"interested 集合含该类型（完整解析）"与
+"不含（仅 29 字节 header 解析后丢弃）"。
+
+| 路径 | 每包耗时 |
+|---|---|
+| 完整解析（22 车载荷） | 33.2 µs |
+| 仅 header 后丢弃 | 8.8 µs |
+| **每包节省** | **24.4 µs** |
+
+折算单核占用节省：60Hz 下 **0.15%**，20Hz 下 **0.05%**。
+
+结论与 §1 预判一致：**这不是性能危机，而是"纯浪费 + 行为不一致"的卫生问题**。
+MOTION（24 车 × 更多浮点场）会大一圈，但数量级不变。Option A 的实际收益排序：
+① console 模式不再因 `PACKETS_TIME_TRIAL` 漏掉 PARTICIPANTS/EVENT 而与 web 模式
+行为不一致（排行榜车手名退化、超车事件缺失）；② 消除每秒数千次无意义对象分配
+（GC 压力）；③ CPU 节省（小但免费）。若未来出现真实 CPU 压力，再评估 Option C。
