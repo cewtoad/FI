@@ -23,6 +23,10 @@ from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from recorder import SessionRecorder
 from state import TelemetryState
 from summariser import Summariser
+from voice import VoiceLink
+
+# Hard cap for a voice question upload (~1 minute of opus audio, generous).
+MAX_VOICE_BYTES = 5 * 1024 * 1024
 
 PAGE = r"""<!doctype html>
 <html lang="zh">
@@ -58,6 +62,9 @@ PAGE = r"""<!doctype html>
   button:disabled { opacity:.5; cursor:default; }
   .quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .quick button { background:#232a36; color:var(--txt); font-weight:400; font-size:12px; padding:6px 10px; }
+  .mic { background:#232a36; color:var(--txt); font-size:16px; padding:10px 14px; }
+  .mic.rec { background:#7a2a2a; color:#fff; animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.55; } }
   .meta { color:var(--dim); font-size:12px; margin-top:8px; }
   @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
 </style>
@@ -82,6 +89,7 @@ PAGE = r"""<!doctype html>
     <div id="log"></div>
     <div class="qbar">
       <input type="text" id="q" placeholder="问点什么…（例：我圈速多少）" autocomplete="off">
+      <button id="mic" class="mic" style="display:none" title="按住说话，松开发送">🎤</button>
       <button id="send">问</button>
     </div>
     <div class="quick">
@@ -91,6 +99,7 @@ PAGE = r"""<!doctype html>
       <button data-q="我现在排第几">位置</button>
       <button data-q="我哪里损失了时间">损失时间</button>
     </div>
+    <div class="meta" id="voicehint" style="display:none">🎤 按住说话 · 松开发送 · Esc 取消</div>
     <div class="meta">快捷键: Enter 发送</div>
   </div>
 </div>
@@ -149,11 +158,15 @@ async function poll(){
     renderFacts(sm.facts);
     renderNotes(sm.notes);
     renderBoard(sm.leaderboard);
-    const conn = document.getElementById("conn");
-    const live = d.stats.accepted > 0 && d.summary.facts.lap;
-    conn.className = "badge " + (live ? "live" : "wait");
-    conn.textContent = live ? "比赛中" : "等待数据";
-    document.getElementById("meta").textContent =
+  const conn = document.getElementById("conn");
+  const live = d.stats.accepted > 0 && d.summary.facts.lap;
+  conn.className = "badge " + (live ? "live" : "wait");
+  conn.textContent = live ? "比赛中" : "等待数据";
+  const v = d.voice || {};
+  window.voiceOn = !!v.stt;
+  document.getElementById("mic").style.display = window.voiceOn ? "" : "none";
+  document.getElementById("voicehint").style.display = window.voiceOn ? "" : "none";
+  document.getElementById("meta").textContent =
       `已收 ${d.stats.accepted} 包 · 丢 ${d.stats.dropped_gate} · 错误 ${JSON.stringify(d.packet_errors||{})}`;
   } catch(e){}
 }
@@ -184,6 +197,65 @@ document.getElementById("q").addEventListener("keydown", e => { if (e.key === "E
 document.querySelectorAll(".quick button").forEach(b => b.onclick = () => {
   document.getElementById("q").value = b.dataset.q; ask();
 });
+
+// ---- voice link (push-to-talk) ----
+let recorder = null, recChunks = [], recT0 = 0, voiceBusy = false, recCancel = false;
+const micBtn = document.getElementById("mic");
+async function startRec(){
+  if (voiceBusy || recorder || !window.voiceOn) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const mt = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "");
+    recorder = mt ? new MediaRecorder(stream, {mimeType: mt}) : new MediaRecorder(stream);
+    recChunks = []; recCancel = false; recT0 = Date.now();
+    recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+    recorder.onstop = onRecStop;
+    recorder.start();
+    micBtn.classList.add("rec"); micBtn.textContent = "⏺";
+  } catch(e){ addMsg("ai", "[麦克风不可用] " + e); }
+}
+function stopRec(cancel){
+  recCancel = recCancel || !!cancel;
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+}
+async function onRecStop(){
+  const dur = Date.now() - recT0;
+  micBtn.classList.remove("rec"); micBtn.textContent = "🎤";
+  const stream = recorder ? recorder.stream : null; recorder = null;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (recCancel || dur < 200) return;          // too short = accidental tap
+  const blob = new Blob(recChunks);
+  if (!blob.size) return;
+  voiceBusy = true; micBtn.disabled = true;
+  addMsg("ai", "…");
+  const log = document.getElementById("log");
+  const pending = log.lastChild;
+  try {
+    const r = await fetch("/api/ask_voice", {method: "POST",
+      headers: {"Content-Type": blob.type || "audio/webm"}, body: blob});
+    const d = await r.json();
+    pending.remove();
+    if (d.error){ addMsg("ai", "[" + d.error + "]"); return; }
+    addMsg("me", d.question);
+    addMsg("ai", d.answer);
+    if (d.audio_b64){
+      const a = new Audio("data:" + (d.audio_mime || "audio/mpeg") + ";base64," + d.audio_b64);
+      a.play().catch(()=>{});
+    }
+  } catch(e){
+    pending.remove();
+    addMsg("ai", "[语音请求失败] " + e);
+  } finally { voiceBusy = false; micBtn.disabled = false; }
+}
+micBtn.addEventListener("pointerdown", e => { e.preventDefault(); startRec(); });
+micBtn.addEventListener("pointerup",   e => { e.preventDefault(); stopRec(false); });
+micBtn.addEventListener("pointerleave", () => { if (recorder) stopRec(true); });
+window.addEventListener("pointerup", () => { if (recorder) stopRec(false); });
+window.addEventListener("keydown", e => { if (e.key === "Escape" && recorder) stopRec(true); });
+window.addEventListener("blur", () => { if (recorder) stopRec(true); });
+
 setInterval(poll, 1000); poll();
 </script>
 </body>
@@ -220,6 +292,10 @@ class _Handler(BaseHTTPRequestHandler):
                 "summary": ctx["summariser"].summarise(snap),
                 "stats": ctx["receiver"].stats(),
                 "packet_errors": snap.get("packet_errors", {}),
+                "voice": {
+                    "stt": ctx["voice"].stt_available,
+                    "tts": ctx["voice"].tts_available,
+                },
             }
             self._send(200, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
@@ -252,6 +328,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if self.path == "/api/ask_voice":
+            self._ask_voice()
+            return
         if self.path != "/api/ask":
             self._send(404, b"not found", "text/plain")
             return
@@ -275,6 +354,46 @@ class _Handler(BaseHTTPRequestHandler):
                                    ensure_ascii=False, default=str).encode("utf-8"),
                    "application/json; charset=utf-8")
 
+    def _ask_voice(self) -> None:
+        """POST /api/ask_voice - raw audio body -> {question, answer, audio}."""
+        ctx = self.server.ctx  # type: ignore[attr-defined]
+        voice: VoiceLink = ctx["voice"]
+        if not voice.available:
+            self._send(503, json.dumps({"error": "voice unavailable"}).encode("utf-8"),
+                       "application/json; charset=utf-8")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_VOICE_BYTES:
+            code = 413 if length > MAX_VOICE_BYTES else 400
+            # Drain the request body (bounded) so the client can finish
+            # uploading and still read the error response instead of dying
+            # on a broken pipe.
+            remaining = min(length, 64 * 1024 * 1024)
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self._send(code, json.dumps({"error": "bad audio size"}).encode("utf-8"),
+                       "application/json; charset=utf-8")
+            return
+        audio = self.rfile.read(length)
+        mime = (self.headers.get("Content-Type") or "audio/webm").split(";")[0].strip()
+        result = voice.process(audio, mime)
+        # Persist the Q&A turn exactly like /api/ask does.
+        if result.get("question") is not None and result.get("answer") is not None:
+            try:
+                eng = ctx.get("engineer")
+                usage = getattr(getattr(eng, "client", None), "last_usage", None)
+                ctx["recorder"].record_qa(result["question"], result["answer"], usage)
+            except Exception:
+                pass
+        self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"),
+                   "application/json; charset=utf-8")
+
 
 def _receiver_thread(state: TelemetryState, receiver: TelemetryReceiver, logger) -> None:
     loop = asyncio.new_event_loop()
@@ -293,6 +412,7 @@ def serve(port: int = 20777, web_port: int = 8765, logger: Optional[logging.Logg
     receiver = TelemetryReceiver(state, port=port, bind_ip="127.0.0.1",
                                  interested=PACKETS_CONSUMED, logger=logger)
     engineer = Engineer()
+    voice = VoiceLink(engineer, state)
 
     t = threading.Thread(target=_receiver_thread, args=(state, receiver, logger), daemon=True)
     t.start()
@@ -304,8 +424,15 @@ def serve(port: int = 20777, web_port: int = 8765, logger: Optional[logging.Logg
         "summariser": Summariser(),
         "engineer": engineer,
         "recorder": SessionRecorder(),
+        "voice": voice,
     }
     logger.info("web UI on http://127.0.0.1:%s  (UDP %s)", web_port, port)
     print(f"\n>>> Open http://127.0.0.1:{web_port}  (UDP listening on {port})", flush=True)
-    print(f">>> Session recording to {httpd.ctx['recorder'].path}\n", flush=True)
+    print(f">>> Session recording to {httpd.ctx['recorder'].path}", flush=True)
+    if voice.available:
+        tts_name = voice.tts.name if voice.tts_available else "off"
+        print(f">>> Voice link: on (stt={voice.stt.name}, tts={tts_name})", flush=True)
+    else:
+        print(">>> Voice link: off (configure STT_* in .env to enable)", flush=True)
+    print("", flush=True)
     httpd.serve_forever()

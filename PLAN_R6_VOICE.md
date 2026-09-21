@@ -1,6 +1,11 @@
 # R6 设计方案：语音链路（按键说话 → STT → engineer 问答 → TTS 播报）
 
-> 状态：**仅设计方案，未写任何代码**。请审阅后圈定实现范围。
+> 状态：**v1 已实现**（2026-09-22），按本文件 §0–§6 落地：浏览器 PTT + 单端点
+> `POST /api/ask_voice`；`stt_client.py`（CloudSTT 默认 / LocalWhisperSTT 可选）、
+> `tts_client.py`（EdgeTTS 默认 / SapiTTS 零依赖兜底）、`voice.py`（编排器）；
+> 仅 web 模式，`run.py` / `engineer.py` 零改动；全部网络组件可 stub 测试
+> （`tests_voice.py`，含真实 HTTP 端点测试与 413/503 路径）。
+> 待实机（Windows + 游戏）验证项见 §7 风险表。
 > 需求：按键触发 → 录音 → STT → 复用 `engineer.py` 问答 → TTS 播报；
 > 与现有架构解耦，STT/TTS 为可替换的独立模块。
 > 对应 DESIGN.md"规划中"的 STT/TTS 两项。
