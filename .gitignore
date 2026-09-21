@@ -1,0 +1,53 @@
+# ---- 敏感信息 (最重要：绝对不要提交) ----
+.env
+.env.*
+!.env.example
+*.key
+secrets.json
+
+# ---- 运行时生成的数据 ----
+sessions/
+*.log
+*.tmp
+capture_report.json
+capture_live_report.json
+crash_packet_dumps/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 测试 / 缓存 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- 项目内引用源码 (不是本项目的代码) ----
+png_src/
