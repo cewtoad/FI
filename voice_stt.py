@@ -1,0 +1,137 @@
+"""Local speech-to-text using faster-whisper (CPU int8).
+
+Model and libs live inside the project folder (stt_lib / stt_models) so nothing
+touches the C: drive.
+
+Public API:
+    LocalSTT.available            -> bool
+    LocalSTT.transcribe(audio)    -> str   (audio: float32 mono @ 16kHz numpy)
+    LocalSTT.record(seconds)      -> np.ndarray  (from the configured mic)
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+
+HERE = Path(__file__).parent
+_SYS_PATH_ADDED = False
+
+
+def _ensure_paths() -> None:
+    global _SYS_PATH_ADDED
+    if not _SYS_PATH_ADDED:
+        sys.path.insert(0, str(HERE / "stt_lib"))
+        os.environ.setdefault("HF_HOME", str(HERE / "stt_models"))
+        _SYS_PATH_ADDED = True
+
+
+SR = 16000
+CHANNELS = 1
+
+
+class LocalSTT:
+    def __init__(self, model_size: str = "small", input_device: str = "G733",
+                 language: str = "zh") -> None:
+        _ensure_paths()
+        self.model_size = model_size
+        self.input_device = input_device
+        self.language = language
+        self._model = None
+        self._sd = None
+        self.last_error: Optional[str] = None
+
+    @property
+    def available(self) -> bool:
+        try:
+            _ensure_paths()
+            import faster_whisper  # noqa: F401
+            import sounddevice  # noqa: F401
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.last_error = str(e)
+            return False
+
+    def _load(self):
+        if self._model is None:
+            from faster_whisper import WhisperModel
+            self._model = WhisperModel(
+                self.model_size, device="cpu", compute_type="int8",
+                download_root=str(HERE / "stt_models"))
+        return self._model
+
+    def _device_index(self) -> Optional[int]:
+        import sounddevice as sd
+        for i, d in enumerate(sd.query_devices()):
+            if self.input_device.lower() in d["name"].lower() \
+                    and d["max_input_channels"] > 0:
+                return i
+        return None
+
+    def record(self, seconds: float):
+        """Blocking record from the configured mic; returns float32 mono array."""
+        import numpy as np
+        import sounddevice as sd
+        idx = self._device_index()
+        audio = sd.rec(int(seconds * SR), samplerate=SR, channels=CHANNELS,
+                       dtype="float32", device=idx)
+        sd.wait()
+        return audio.flatten()
+
+    def transcribe(self, audio) -> str:
+        model = self._load()
+        segments, _info = model.transcribe(
+            audio, language=self.language, beam_size=5, vad_filter=True)
+        return "".join(seg.text for seg in segments).strip()
+
+
+class StreamingRecorder:
+    """Records in the background; start()/stop() around a spoken question.
+
+    Lets the caller begin recording on a key press and stop on the next press,
+    without blocking.
+    """
+
+    def __init__(self, input_device: str = "G733", max_seconds: float = 10.0) -> None:
+        _ensure_paths()
+        self.input_device = input_device
+        self.max_seconds = max_seconds
+        self._stream = None
+        self._frames = []
+        self._recording = False
+
+    def _device_index(self) -> Optional[int]:
+        import sounddevice as sd
+        for i, d in enumerate(sd.query_devices()):
+            if self.input_device.lower() in d["name"].lower() \
+                    and d["max_input_channels"] > 0:
+                return i
+        return None
+
+    def start(self) -> None:
+        import sounddevice as sd
+        self._frames = []
+        self._recording = True
+        idx = self._device_index()
+
+        def _cb(indata, frames, time_info, status):
+            if self._recording:
+                self._frames.append(indata.copy())
+
+        self._stream = sd.InputStream(
+            samplerate=SR, channels=CHANNELS, dtype="float32",
+            device=idx, callback=_cb)
+        self._stream.start()
+
+    def stop(self):
+        import numpy as np
+        self._recording = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        if not self._frames:
+            return np.zeros(0, dtype="float32")
+        return np.concatenate(self._frames).flatten()

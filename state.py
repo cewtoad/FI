@@ -395,12 +395,39 @@ class TelemetryState:
         dmg = self._player(packet.m_carDamageData)
         if dmg is None:
             return
+        tw = dmg.m_tyresWear
+        td = getattr(dmg, "m_tyresDamage", None)
+        bl = getattr(dmg, "m_tyreBlisters", None)
         self.latest["damage"] = {
-            "tyre_wear_fl": dmg.m_tyresWear[0] if dmg.m_tyresWear else None,
-            "tyre_wear_fr": dmg.m_tyresWear[1] if dmg.m_tyresWear else None,
-            "tyre_wear_rl": dmg.m_tyresWear[2] if dmg.m_tyresWear else None,
-            "tyre_wear_rr": dmg.m_tyresWear[3] if dmg.m_tyresWear else None,
+            # Bodywork / aero (0-100 %)
+            "front_left_wing": dmg.m_frontLeftWingDamage,
+            "front_right_wing": dmg.m_frontRightWingDamage,
+            "rear_wing": dmg.m_rearWingDamage,
+            "floor": dmg.m_floorDamage,
+            "diffuser": getattr(dmg, "m_diffuserDamage", None),
+            "sidepod": dmg.m_sidepodDamage,
+            "drs_fault": bool(getattr(dmg, "m_drsFault", False)),
+            # Power unit / gearbox (0-100 % wear)
+            "engine": dmg.m_engineDamage,
+            "gearbox": dmg.m_gearBoxDamage,
+            # Flags
+            "engine_blown": bool(getattr(dmg, "m_engineBlown", False)),
+            "engine_seized": bool(getattr(dmg, "m_engineSeized", False)),
+            "ers_fault": bool(getattr(dmg, "m_ersFault", False)),
+            # Tyres
+            "tyre_wear_fl": tw[0] if tw else None,
+            "tyre_wear_fr": tw[1] if tw else None,
+            "tyre_wear_rl": tw[2] if tw else None,
+            "tyre_wear_rr": tw[3] if tw else None,
+            "tyre_damage_avg": (sum(td) / len(td)) if td else None,
+            "tyre_blister_max": max(bl) if bl else None,
         }
+        # Derived: worst bodywork damage + a rough "significant damage" flag.
+        body = [self.latest["damage"][k] for k in
+                ("front_left_wing", "front_right_wing", "rear_wing", "floor", "sidepod")
+                if self.latest["damage"].get(k) is not None]
+        self.latest["damage"]["worst_bodywork"] = max(body) if body else None
+        self.latest["damage"]["has_significant_damage"] = any(v >= 20 for v in body) if body else False
 
     def _on_car_telemetry_2(self, packet) -> None:
         """F1 2026 active aero + overtake telemetry (packet ID 16)."""

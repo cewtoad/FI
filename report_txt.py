@@ -1,7 +1,7 @@
 """Human-readable TXT report from a recorded session JSON.
 
 Reads a session_*.json written by recorder.py and renders a plain-text report
-with a lap table and the Q&A log.
+with a lap table, leaderboard, vehicle status and the Q&A log.
 """
 
 from __future__ import annotations
@@ -23,8 +23,17 @@ def _fmt_ms(ms) -> str:
 def _gap(ms) -> str:
     if not ms or ms <= 0:
         return "-"
-    sec = ms / 1000.0
-    return f"+{sec:.3f}s"
+    return f"+{ms/1000:.3f}s"
+
+
+def _r(v, nd: int = 1):
+    """Round a numeric value for display, or '-' if None."""
+    if v is None:
+        return "-"
+    try:
+        return round(float(v), nd)
+    except (TypeError, ValueError):
+        return v
 
 
 def render(data: Dict[str, Any]) -> str:
@@ -81,6 +90,28 @@ def render(data: Dict[str, Any]) -> str:
             age = r.get("tyre_age")
             L(f"  {r['position']:>3}  {mark}{str(r.get('driver') or '-'):<15}  "
               f"{tyre:<6}  {str(age if age is not None else '-'):>4}  {gap:>9}")
+        L("")
+
+    # ---- vehicle status (damage + pit) ----
+    vs = data.get("vehicle_status") or {}
+    dmg = vs.get("damage") or {}
+    if dmg:
+        L("-" * 64)
+        L("  车辆状态")
+        L("-" * 64)
+        L(f"  进站次数: {vs.get('num_pit_stops', 0)}    "
+          f"进站状态: {vs.get('pit_status') or 'NONE'}    "
+          f"限速器: {'开' if vs.get('pit_limiter') else '关'}")
+        L("")
+        L("  车损 (%):")
+        L(f"    前翼左 {dmg.get('front_left_wing')}  前翼右 {dmg.get('front_right_wing')}  "
+          f"尾翼 {dmg.get('rear_wing')}  底板 {dmg.get('floor')}  侧箱 {dmg.get('sidepod')}")
+        L(f"    引擎 {dmg.get('engine')}  变速箱 {dmg.get('gearbox')}  "
+          f"DRS故障 {'是' if dmg.get('drs_fault') else '否'}  "
+          f"ERS故障 {'是' if dmg.get('ers_fault') else '否'}")
+        L("  轮胎磨损 (%):")
+        L(f"    FL {_r(dmg.get('tyre_wear_fl'))}  FR {_r(dmg.get('tyre_wear_fr'))}  "
+          f"RL {_r(dmg.get('tyre_wear_rl'))}  RR {_r(dmg.get('tyre_wear_rr'))}")
         L("")
 
     # ---- qa ----

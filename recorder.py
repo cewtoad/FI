@@ -62,6 +62,17 @@ class SessionRecorder:
         if lb:
             self.data["final_leaderboard"] = lb
 
+        # Keep the latest vehicle status (damage + pit) for the report.
+        dmg = latest.get("damage")
+        lap_now = latest.get("lap", {})
+        if dmg:
+            self.data["vehicle_status"] = {
+                "damage": dmg,
+                "pit_status": lap_now.get("pit_status"),
+                "num_pit_stops": lap_now.get("num_pit_stops"),
+                "pit_limiter": latest.get("status", {}).get("pit_limiter"),
+            }
+
         hist = latest.get("history", {})
         status = latest.get("status", {})
         car = latest.get("car", {})

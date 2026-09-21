@@ -24,17 +24,24 @@ _DEFAULT_MODEL = "deepseek-chat"
 
 
 def load_dotenv(path: Optional[Path] = None) -> Dict[str, str]:
-    """Read a simple KEY=VALUE .env file (no external dependency)."""
+    """Read a simple KEY=VALUE .env file (no external dependency).
+
+    Uses utf-8-sig so a BOM (e.g. from Windows Notepad) does not corrupt the
+    first key. Also strips surrounding single/double quotes from values.
+    """
     env: Dict[str, str] = {}
     p = path or (Path(__file__).parent / ".env")
     if not p.exists():
         return env
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        env[k.strip()] = v.strip()
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        env[k.strip().lstrip("\ufeff")] = v
     return env
 
 

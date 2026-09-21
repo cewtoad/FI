@@ -13,6 +13,11 @@ capture_report.json
 capture_live_report.json
 crash_packet_dumps/
 
+# ---- STT 本地资源 (大文件，不提交；见 download_stt_model.py 自行下载) ----
+stt_lib/
+stt_models/
+*.wav
+
 # ---- Python ----
 __pycache__/
 *.py[cod]

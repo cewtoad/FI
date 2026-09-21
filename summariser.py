@@ -90,6 +90,29 @@ class Summariser:
             facts["overtake_available"] = car2.get("overtake_available")
             facts["overtake_active"] = car2.get("overtake_active")
 
+        # Damage summary (only surface if anything is actually damaged).
+        damage = latest.get("damage", {})
+        if damage:
+            if damage.get("has_significant_damage"):
+                facts["damage_bodywork_max_pct"] = damage.get("worst_bodywork")
+            if damage.get("drs_fault"):
+                facts["drs_fault"] = True
+            if damage.get("engine_blown") or damage.get("engine_seized"):
+                facts["engine_critical"] = True
+            if damage.get("ers_fault"):
+                facts["ers_fault"] = True
+            tw = [damage.get(k) for k in
+                  ("tyre_wear_fl", "tyre_wear_fr", "tyre_wear_rl", "tyre_wear_rr")]
+            if any(v is not None for v in tw):
+                facts["tyre_wear_pct"] = [round(v, 1) if v is not None else None for v in tw]
+
+        # Pit status.
+        if lap.get("pit_status") and lap.get("pit_status") != "NONE":
+            facts["pit_status"] = lap.get("pit_status")
+        facts["pit_stops"] = lap.get("num_pit_stops")
+        if status.get("pit_limiter"):
+            facts["pit_limiter_on"] = True
+
         # Battle context: who is directly ahead/behind and by how much.
         posctx = snap.get("position_context") or {}
         ahead = posctx.get("ahead")
@@ -108,6 +131,8 @@ class Summariser:
         notes.extend(self._session_notes(latest))
         notes.extend(self._aero_notes(car2))
         notes.extend(self._battle_notes(pos, ahead, behind))
+        notes.extend(self._damage_notes(damage))
+        notes.extend(self._pit_notes(lap, status))
 
         # Recent position-change events (authoritative "what just happened").
         events = snap.get("events") or []
@@ -200,4 +225,41 @@ class Summariser:
                 out.append("已进入追击/超车范围（1秒内）")
         if behind and isinstance(pos, int) and pos > 1:
             out.append(f"后车 {behind['driver']} (P{behind['position']})")
+        return out
+
+    def _damage_notes(self, damage) -> List[str]:
+        out: List[str] = []
+        if not damage:
+            return out
+        if damage.get("engine_blown"):
+            out.append("警告: 引擎已损毁")
+        if damage.get("engine_seized"):
+            out.append("警告: 引擎过热抱死")
+        if damage.get("drs_fault"):
+            out.append("DRS 系统故障")
+        if damage.get("ers_fault"):
+            out.append("ERS 故障")
+        body = damage.get("worst_bodywork")
+        if body is not None and body >= 60:
+            out.append(f"车损严重: 最严重部件已损坏 {body}%")
+        elif body is not None and body >= 20:
+            out.append(f"有车损: 最严重部件 {body}%")
+        # Only mention tyre wear when meaningful.
+        tw = [damage.get(k) for k in
+              ("tyre_wear_fl", "tyre_wear_fr", "tyre_wear_rl", "tyre_wear_rr")]
+        tw = [v for v in tw if v is not None]
+        if tw and max(tw) >= 70:
+            out.append(f"轮胎磨损偏高: 最高 {round(max(tw))}%")
+        return out
+
+    def _pit_notes(self, lap, status) -> List[str]:
+        out: List[str] = []
+        pit = lap.get("pit_status")
+        if pit and pit != "NONE":
+            out.append(f"进站状态: {pit}")
+        if status.get("pit_limiter"):
+            out.append("限速器已开启（在维修区）")
+        stops = lap.get("num_pit_stops")
+        if isinstance(stops, int) and stops > 0:
+            out.append(f"已进站 {stops} 次")
         return out
