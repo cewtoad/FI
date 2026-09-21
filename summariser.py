@@ -113,10 +113,22 @@ class Summariser:
         events = snap.get("events") or []
         recent_events = [e.get("text") for e in events if e.get("text")]
 
+        # Lap history: show every completed lap; invalid ones (cut / off-track)
+        # stay visible but are marked. Falls back to the valid-only trend for
+        # snapshots that predate lap_records.
+        records = trends.get("lap_records") or []
+        if records:
+            lap_history = [
+                _fmt_ms(r.get("lap_time_ms")) + ("" if r.get("valid") else "(无效)")
+                for r in records
+            ]
+        else:
+            lap_history = [_fmt_ms(x) for x in trends.get("lap_times_ms", [])]
+
         return {
             "facts": facts,
             "notes": notes,
-            "lap_history": [_fmt_ms(x) for x in trends.get("lap_times_ms", [])],
+            "lap_history": lap_history,
             "leaderboard": leaderboard,
             "recent_events": recent_events,
         }

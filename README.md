@@ -46,6 +46,7 @@ F1 游戏内 **设置 → UDP 遥测**：
 | UDP 遥测 | **开启** |
 | UDP IP | `127.0.0.1` |
 | UDP 端口 | `20777` |
+| UDP 频率 | **20Hz**（推荐：面板与问答完全够用，数据量与解析开销仅为 60Hz 的 1/3） |
 | UDP 赛制 | **2026**（或与你游戏版本对应）|
 | 你的遥测 | **受限** ⚠️ |
 
@@ -74,6 +75,15 @@ py -3.12 run.py
 - **右侧**：车队无线电问答框（快捷按钮 或 打字提问）
 - **导出**：右上角按钮导出 TXT / JSON 报告
 - **自动录制**：每次运行的数据自动存到 `sessions/`
+
+### 语音无线电（可选）
+
+问答框旁按住 🎤 说话，松开后语音回答（浏览器需麦克风权限；不配置则整体关闭，不影响其他功能）：
+
+1. **STT（语音转文字）**：在 `.env` 配置 OpenAI 兼容接口——`STT_BASE_URL`（如 `https://api.openai.com/v1`）、`STT_API_KEY`、`STT_MODEL`；或 `pip install faster-whisper` 走本地识别（`STT_PROVIDER=local`）
+2. **TTS（文字转语音）**：`pip install edge-tts`（默认，神经音色）；Windows 可零依赖用系统语音（`TTS_PROVIDER=sapi`）；`TTS_PROVIDER=off` 只显示文字
+
+建议游戏使用无边框窗口，方便切到页面按麦克风。
 
 ---
 
