@@ -13,10 +13,14 @@ No config, no IPC, no async event bus, no network. Plain CPU-bound aggregation.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional
 
 from lib.delta import LapDeltaManager
-from lib.f1_types import F1PacketType, F1Utils, LapHistoryData
+from lib.f1_types import (F1PacketType, F1Utils, LapHistoryData,
+                          PacketEventData)
+from lib.fuel_rate_recommender import FuelRateRecommender, FuelRemainingPerLap
+from lib.rolling_history import RollingHistory
 from lib.fuel_rate_recommender import FuelRateRecommender, FuelRemainingPerLap
 from lib.rolling_history import RollingHistory
 
@@ -28,6 +32,10 @@ class TelemetryState:
     HISTORY_LAPS = 20
     # Minimum fuel required to finish (safety margin, kg). Adjust later via config.
     MIN_FUEL_KG = 1.5
+    # After a player-involved official OVERTAKE event, a leaderboard position
+    # diff in the same direction within this window is treated as the same
+    # overtake (already reported) and not recorded again.
+    OFFICIAL_EVENT_DEDUP_S = 8.0
 
     def __init__(self, error_logger: Optional[Any] = None) -> None:
         self._error_logger = error_logger
@@ -87,6 +95,12 @@ class TelemetryState:
         self.is_spectating: bool = False
         self.spectator_car_index: Optional[int] = None
 
+        # Dedup between official OVERTAKE events and leaderboard position
+        # diffs: ("up"|"down", expiry monotonic time) set when an official
+        # player-involved overtake is recorded, consumed by the next diff.
+        self._pending_diff_event: Optional[str] = None
+        self._pending_diff_until: float = 0.0
+
     # ---------------------------------------------------------------- session
 
     def note_header(self, header) -> bool:
@@ -128,6 +142,8 @@ class TelemetryState:
         self._event_seq = 0
         self.is_spectating = False
         self.spectator_car_index = None
+        self._pending_diff_event = None
+        self._pending_diff_until = 0.0
 
     # --------------------------------------------------------------- packets
 
@@ -176,6 +192,8 @@ class TelemetryState:
             self._on_time_trial(packet)
         elif pid == F1PacketType.PARTICIPANTS:
             self._on_participants(packet)
+        elif pid == F1PacketType.EVENT:
+            self._on_event(packet)
 
     def _resolve_focus_car(self, header) -> int:
         """Choose which car index to report on.
@@ -457,6 +475,60 @@ class TelemetryState:
             return 0
         return (min_part or 0) * 60000 + (ms_part or 0)
 
+    # ----------------------------------------------------------------- events
+
+    def _on_event(self, packet) -> None:
+        """Handle EVENT packets.
+
+        Only OVERTAKE (OVTK) is consumed so far. It is the authoritative
+        source for "who overtook whom" (both vehicle indices come straight
+        from the game), so it takes priority over the leaderboard position
+        diff, which stays as a fallback for when no official event arrives.
+        """
+        code = getattr(packet, "m_eventCode", None)
+        if code != PacketEventData.EventPacketType.OVERTAKE:
+            return
+        details = getattr(packet, "mEventDetails", None)
+        overtaker = getattr(details, "overtakingVehicleIdx", None)
+        overtaken = getattr(details, "beingOvertakenVehicleIdx", None)
+        if overtaker is None or overtaken is None:
+            return
+
+        focus = self.player_car_index
+        overtaker_name = self._driver_name(overtaker)
+        overtaken_name = self._driver_name(overtaken)
+        if overtaker == focus:
+            kind, text = "position_up", f"你超过了 {overtaken_name}"
+            self._arm_diff_dedup("up")
+        elif overtaken == focus:
+            kind, text = "position_down", f"你被 {overtaker_name} 超过"
+            self._arm_diff_dedup("down")
+        else:
+            kind, text = "field_overtake", f"{overtaker_name} 超过了 {overtaken_name}"
+
+        # from/to carry the two vehicle indices for official overtake events
+        # (for diff-derived events they carry positions).
+        self._event_seq += 1
+        self.events.append({
+            "seq": self._event_seq,
+            "kind": kind,
+            "from": overtaker,
+            "to": overtaken,
+            "text": text,
+        })
+        self.events = self.events[-20:]
+
+    def _arm_diff_dedup(self, direction: str) -> None:
+        """Remember that an official player-involved overtake was just recorded,
+        so the next matching leaderboard diff is not double-reported."""
+        self._pending_diff_event = direction
+        self._pending_diff_until = time.monotonic() + self.OFFICIAL_EVENT_DEDUP_S
+
+    def _driver_name(self, idx: int) -> str:
+        pinfo = self._participants.get(idx)
+        name = (pinfo or {}).get("name")
+        return name or f"car{idx}"
+
     # ----------------------------------------------------------- leaderboard
 
     def _on_participants(self, packet) -> None:
@@ -525,7 +597,7 @@ class TelemetryState:
         if player_row:
             new_pos = player_row["position"]
             if self._last_position is not None and new_pos != self._last_position:
-                self._record_position_event(self._last_position, new_pos, rows)
+                self._maybe_record_position_event(self._last_position, new_pos, rows)
             self._last_position = new_pos
 
         # Player's relative gaps to neighbours.
@@ -553,6 +625,19 @@ class TelemetryState:
                 return {"driver": r["driver"], "position": r["position"],
                         "gap_ms": r["gap_to_front_ms"]}
         return None
+
+    def _maybe_record_position_event(self, old_pos: int, new_pos: int, rows: list) -> None:
+        """Record a position-change event from the leaderboard diff, unless the
+        same change was already reported via an official OVERTAKE event."""
+        pending = self._pending_diff_event
+        if pending is not None:
+            expiry = self._pending_diff_until
+            self._pending_diff_event = None
+            self._pending_diff_until = 0.0
+            direction = "up" if new_pos < old_pos else "down"
+            if direction == pending and time.monotonic() <= expiry:
+                return  # duplicate of the official OVERTAKE event - skip
+        self._record_position_event(old_pos, new_pos, rows)
 
     def _record_position_event(self, old_pos: int, new_pos: int, rows: list) -> None:
         """Record a gained/lost-place event with the other driver's name."""
