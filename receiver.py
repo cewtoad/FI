@@ -95,7 +95,18 @@ class TelemetryReceiver:
             raise
 
     def _handle_raw(self, raw_packet: bytes) -> None:
-        packet = self.factory.parse(raw_packet)
+        # The factory raises (instead of returning None) for a few hard guards
+        # such as unsupported packet formats. One malformed / old-format
+        # packet must never kill the receive loop, so catch everything here,
+        # count it and move on.
+        try:
+            packet = self.factory.parse(raw_packet)
+        except Exception as e:  # noqa: BLE001 - intentionally broad
+            self.dropped_unparsed += 1
+            reason = f"parse-exception: {type(e).__name__}"
+            self.drop_reasons[reason] = self.drop_reasons.get(reason, 0) + 1
+            self.logger.warning("packet parse raised %s: %r", type(e).__name__, e)
+            return
         if packet is None:
             self.dropped_unparsed += 1
             reason = self.factory.last_failure_reason or "unknown"

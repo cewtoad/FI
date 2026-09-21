@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from lib.delta import LapDeltaManager
-from lib.f1_types import F1PacketType, F1Utils
+from lib.f1_types import F1PacketType, F1Utils, LapHistoryData
 from lib.fuel_rate_recommender import FuelRateRecommender, FuelRemainingPerLap
 from lib.rolling_history import RollingHistory
 
@@ -49,6 +49,10 @@ class TelemetryState:
         self.lap_times_ms: RollingHistory = RollingHistory(self.HISTORY_LAPS)
         self.fuel_per_lap: RollingHistory = RollingHistory(self.HISTORY_LAPS)
         self.tyre_wear_per_lap: RollingHistory = RollingHistory(self.HISTORY_LAPS)
+        # Full completed-lap records (valid AND invalid), each entry
+        # {"lap_num", "lap_time_ms", "valid"}. Invalid laps are kept here for
+        # the lap history display, but never enter lap_times_ms / best-lap.
+        self.lap_records: RollingHistory = RollingHistory(self.HISTORY_LAPS)
 
         # Analyzers
         self.delta = LapDeltaManager()
@@ -56,6 +60,9 @@ class TelemetryState:
 
         # Internal bookkeeping to detect lap boundaries
         self._last_current_lap_num: Optional[int] = None
+        # m_currentLapInvalid as last seen on the lap still being driven; the
+        # validity of the lap that just ended is read from here at the boundary.
+        self._last_lap_invalid: bool = False
         self._last_fuel_in_tank: Optional[float] = None
         self._best_lap_ms: Optional[int] = None
         # Fuel bookkeeping: lap_num -> fuel at end of that lap
@@ -102,9 +109,11 @@ class TelemetryState:
         self.lap_times_ms.clear()
         self.fuel_per_lap.clear()
         self.tyre_wear_per_lap.clear()
+        self.lap_records.clear()
         self.delta = LapDeltaManager()
         self.fuel = None
         self._last_current_lap_num = None
+        self._last_lap_invalid = False
         self._last_fuel_in_tank = None
         self._best_lap_ms = None
         self._fuel_at_lap_end = {}
@@ -262,17 +271,32 @@ class TelemetryState:
         )
 
         # Detect lap boundary: feed completed lap time + fuel into trend history.
+        # The completed lap's validity is the invalid flag as last seen on that
+        # lap (the packet that increments the lap number already describes the
+        # NEW lap, so we cannot read it there).
         if self._last_current_lap_num is not None and cur_lap == self._last_current_lap_num + 1:
-            self._on_lap_completed(self._last_current_lap_num, lap.m_lastLapTimeInMS)
+            self._on_lap_completed(self._last_current_lap_num, lap.m_lastLapTimeInMS,
+                                   valid=not self._last_lap_invalid)
         self._last_current_lap_num = cur_lap
+        self._last_lap_invalid = bool(lap.m_currentLapInvalid)
 
-    def _on_lap_completed(self, completed_lap_num: int, last_lap_ms: int) -> None:
+    def _on_lap_completed(self, completed_lap_num: int, last_lap_ms: int,
+                          valid: bool = True) -> None:
         if last_lap_ms and last_lap_ms > 0:
-            self.lap_times_ms.push(last_lap_ms)
-            if self._best_lap_ms is None or last_lap_ms < self._best_lap_ms:
-                self._best_lap_ms = last_lap_ms
-                # best lap reference is the lap that just ended
-                self.delta.set_best_lap(completed_lap_num)
+            # Every completed lap is recorded (invalid ones marked as such), but
+            # only valid laps may feed the pace trend and the best-lap reference
+            # - a cut/invalid lap must never become the delta baseline.
+            self.lap_records.push({
+                "lap_num": completed_lap_num,
+                "lap_time_ms": last_lap_ms,
+                "valid": valid,
+            })
+            if valid:
+                self.lap_times_ms.push(last_lap_ms)
+                if self._best_lap_ms is None or last_lap_ms < self._best_lap_ms:
+                    self._best_lap_ms = last_lap_ms
+                    # best lap reference is the lap that just ended
+                    self.delta.set_best_lap(completed_lap_num)
         # Fuel for the finished lap is ingested lazily from car-status samples.
 
     def _on_car_telemetry(self, packet) -> None:
@@ -390,7 +414,9 @@ class TelemetryState:
                 "sector1_ms": self._combine(h.m_sector1TimeInMS, h.m_sector1TimeMinutes),
                 "sector2_ms": self._combine(h.m_sector2TimeInMS, h.m_sector2TimeMinutes),
                 "sector3_ms": self._combine(h.m_sector3TimeInMS, h.m_sector3TimeMinutes),
-                "valid": bool(h.m_lapValidBitFlags),
+                # Bit 0x01 = "lap valid"; the other bits are per-sector validity
+                # and must NOT make an invalid lap look valid.
+                "valid": bool(h.m_lapValidBitFlags & LapHistoryData.FULL_LAP_VALID_BIT_MASK),
             })
         stints = []
         for s in packet.m_tyreStintsHistoryData:
@@ -401,10 +427,15 @@ class TelemetryState:
                 "compound_actual": str(getattr(s, "m_tyreActualCompound", "")),
                 "compound_visual": str(getattr(s, "m_tyreVisualCompound", "")),
             })
+        # Only trust the game's best-lap pointer if it actually points at a
+        # valid lap (it should, but a stale/edge value must not leak through).
+        best_lap_num = packet.m_bestLapTimeLapNum
+        if best_lap_num and best_lap_num not in {l["lap_num"] for l in laps if l["valid"]}:
+            best_lap_num = None
         self.latest["history"] = {
             "num_laps": packet.m_numLaps,
             "num_tyre_stints": packet.m_numTyreStints,
-            "best_lap_time_lap_num": packet.m_bestLapTimeLapNum,
+            "best_lap_time_lap_num": best_lap_num,
             "laps": laps,
             "stints": stints,
         }
@@ -581,6 +612,9 @@ class TelemetryState:
             "trends": {
                 "lap_times_ms": self.lap_times_ms.values(),
                 "best_lap_ms": self._best_lap_ms,
+                # All completed laps incl. invalid ones (each {lap_num,
+                # lap_time_ms, valid}); lap_times_ms above is valid-only.
+                "lap_records": self.lap_records.values(),
             },
             "packet_counts": dict(self.packet_counts),
             "packet_errors": dict(self.packet_errors),

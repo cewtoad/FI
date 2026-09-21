@@ -65,7 +65,8 @@ def make_session(session_uid: int, total_laps: int) -> bytes:
 def make_lap(packet_format: int, packet_id: F1PacketType, session_uid: int, frame: int,
              session_time: float, last_lap_ms: int, cur_lap_ms: int,
              lap_distance: float, total_distance: float,
-             cur_lap_num: int, position: int, sector: int) -> bytes:
+             cur_lap_num: int, position: int, sector: int,
+             current_lap_invalid: int = 0) -> bytes:
     laps: List[LapData] = []
     for i in range(NUM_CARS):
         if i == PLAYER:
@@ -88,7 +89,7 @@ def make_lap(packet_format: int, packet_id: F1PacketType, session_uid: int, fram
                 pit_status=0,
                 num_pit_stops=0,
                 sector=sector,
-                current_lap_invalid=0,
+                current_lap_invalid=current_lap_invalid,
                 penalties=0,
                 total_warnings=0,
                 corner_cutting_warnings=0,
