@@ -16,7 +16,7 @@
 - ⛽ **油耗策略** — 消耗率、剩余圈数、完赛油量预测
 - 🌡 **轮胎 + 损伤** — 胎温/胎压/磨损、前后翼/底板/引擎车损、进站状态
 - ⚔ **战况感知** — 位置变化事件，由游戏官方 OVTK 超车事件驱动
-- 🎙 **语音问答** — 按键说话 → 本地语音识别 → AI 回答 → 语音播报
+- 🎙 **语音问答** — 按【小键盘 +】说话 → 本地语音识别 → AI 回答 → 语音播报（可完全离线）
 - 🎧 **观赛模式** — 焦点自动跟随被观看的车辆
 - 📝 **会话录制** — 自动生成 JSON（原始）+ TXT（可读）报告
 - 🖥 **双界面** — 网页面板 + 终端面板
@@ -33,7 +33,7 @@
 
 | | **轻量核心包** `core` | **全量语音包** `full` |
 |---|---|---|
-| 体积 | 约 25 MB | 约 760 MB |
+| 体积 | 约 25 MB | 约 950 MB |
 | 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `启动.bat` |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
 | 语音识别 | 云端 STT（填 key）+ SAPI 播报 | **本地 whisper，完全离线** |
@@ -140,7 +140,12 @@ py -3.12 voice_main.py
 ```
 
 **可选参数**：`--input <片段> --output <片段>`（按设备名片段选麦克风/输出）
-修改触发键：编辑 `voice_trigger.py` 的 `TRIGGER_VK`。
+修改触发键：编辑 `voice_trigger.py` 的 `TRIGGER_VK`（默认 `0x6B` = 小键盘 +）。
+
+> **离线 & 无 CUDA**：本地识别固定用 **CPU int8**（不要求显卡/CUDA 库），
+> 模型从项目内 `stt_models/` 读取，不联网、不写 C 盘。
+> 播放会自动匹配输出设备（重采样到设备原生采样率、单声道转立体声），
+> 适配 G733 这类 8 声道游戏耳机。
 
 **不知道设备叫什么名字？**
 
@@ -172,7 +177,11 @@ py -3.12 voice_main.py --list-audio
 | POST | `/api/profile` | 热切换 `{profile: fast\|standard\|deep}` |
 | GET | `/api/audio` | 列出麦克风/输出设备 + 当前选择 |
 | POST | `/api/audio` | 热切换 `{input?, output?}` |
+| GET | `/api/version` | 检查是否有新版本（缓存 6 小时）|
 | GET | `/api/export` / `/api/export_txt` | 下载会话报告 |
+
+> `/api/llm` 与 `/api/audio` 的**写操作仅允许来自本机（127.0.0.1）**，
+> 即使面板绑定到局域网也无法被远程改写 key。
 
 **AI 档位**
 
@@ -199,7 +208,7 @@ flowchart TD
 
     subgraph L1["1. 接收层 receiver.py"]
         UDP["UdpTransport<br/>异步收包"]
-        PARSE["PacketParserFactory<br/>16 种 packet 解析"]
+        PARSE["PacketParserFactory<br/>17 种 packet 解析"]
         GATE["SessionFrameGate<br/>去重/防回退"]
         UDP --> PARSE --> GATE
     end
@@ -270,9 +279,9 @@ F1_TR/
 ├── build_release.ps1   构建两个发布包（轻量 exe + 全量语音包）
 ├── version_info.txt    exe 版本元数据
 ├── RELEASE_SIGNING.md  代码签名申请指引
-├── 启动.bat            一键启动（网页模式，自动选 embedded Python）
+├── 启动.bat            一键启动（菜单：网页 / 语音，自动选 embedded Python）
 ├── lib/                核心库
-│   ├── f1_types/           16 种 F1 packet 解析（2023–2026）
+│   ├── f1_types/           17 种 F1 packet 解析（2023–2026）
 │   ├── socket_receiver/    UDP 传输
 │   ├── telemetry_manager/  解析工厂 + 帧门
 │   ├── delta/              圈速 delta
@@ -288,7 +297,7 @@ F1_TR/
 |---|---|---|
 | 操作系统 | Windows 10 1809+ / 11 x64 | Raw Input / SAPI / http.server 均原生 |
 | 游戏 | F1 23 / 24 / 25 / 26（packet 2023–2026） | 未知新格式会被丢弃并计数，不会崩溃 |
-| CPU（本地语音） | 需 AVX 指令集 | 老 CPU 请用云端 STT（`STT_PROVIDER=cloud`）|
+| CPU（本地语音） | 需 AVX 指令集，**不需要显卡/CUDA** | 固定 CPU int8；老 CPU 可改用云端 STT（`STT_PROVIDER=cloud`）|
 | 语音零依赖路径 | 云端 STT + SAPI 播报 | 纯标准库，轻量核心包即可用 |
 | AI | 任意 OpenAI 兼容端点 | DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama |
 | 端口 | UDP `20777` | 与 SimHub / CrewChief **互斥**（单消费者），同时用需转发 |
@@ -332,8 +341,8 @@ F1_TR/
 ## 技术栈
 
 - **Python 3.12**，接收/解析/HTTP 服务/语音播放全部基于 **标准库 + 少量可选本地依赖**
-- **DeepSeek API** 提供语言能力
-- **faster-whisper** 提供本地语音识别（可选）
+- 任意 **OpenAI 兼容端点**提供语言能力（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama…）
+- **faster-whisper** 提供本地语音识别（可选，CPU int8，无需 CUDA）
 - 遥测解析复用 [pits-n-giggles](https://github.com/ashwin-nat/pits-n-giggles)（MIT）
 
 ---
