@@ -1,4 +1,4 @@
-F1 Race Engineer —— 全量语音包（解压即用）
+﻿F1 Race Engineer —— 全量语音包（解压即用）
 ================================================
 
 一、怎么用
@@ -15,7 +15,7 @@ F1 Race Engineer —— 全量语音包（解压即用）
   - 全量包已内置本地语音识别（faster-whisper + small 模型），无需联网、无需再下载。
   - 语音模式：双击【启动.bat】后，或在命令行运行：
        python.exe voice_main.py
-     游戏中按【小键盘 0】说话：按一下开始，再按一下结束。
+     游戏中按【小键盘 +】说话：按一下开始，再按一下结束。
   - 不知道麦克风/耳机叫什么名字：
        python.exe voice_main.py --list-audio
      然后把名字片段填进 .env 的 AUDIO_INPUT / AUDIO_OUTPUT，或在网页【设置】里切换。

@@ -59,9 +59,36 @@ def _run_web(port: int, web_port: int, open_browser: bool) -> None:
     serve(port=port, web_port=web_port)
 
 
+def _voice_deps_present() -> bool:
+    """True when the local STT stack (faster-whisper + sounddevice) is available.
+
+    The light core pack deliberately ships without it, so voice mode there can
+    only work via cloud STT. This check lets us say so up front instead of
+    letting the user hit a silent 'STT 不可用'.
+    """
+    try:
+        import sys as _sys
+        from pathlib import Path
+        from paths import app_root
+        lib = app_root() / "stt_lib"
+        if lib.exists() and str(lib) not in _sys.path:
+            _sys.path.insert(0, str(lib))
+        import faster_whisper  # noqa: F401
+        import sounddevice  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def _run_voice(port: int, argv: list) -> None:
     import voice_main
     _preflight(port)
+    if not _voice_deps_present():
+        print("⚠ 未检测到本地语音依赖 (faster-whisper / sounddevice)。")
+        print("   本程序仍会启动，但语音识别需改用云端：在 .env 设")
+        print("       STT_PROVIDER=cloud")
+        print("       STT_BASE_URL=...  STT_API_KEY=...  STT_MODEL=whisper-1")
+        print("   若要完全离线的本地语音，请下载【全量语音包】。\n")
     sys.argv = ["voice_main.py", *argv]
     voice_main.main()
 
@@ -85,7 +112,22 @@ def _ask_mode(port: int) -> str:
     return "q"
 
 
+def _ensure_env_file() -> None:
+    """Create a .env next to the exe on first run so there is something to edit."""
+    from paths import app_root
+    root = app_root()
+    env = root / ".env"
+    example = root / ".env.example"
+    if not env.exists() and example.exists():
+        try:
+            env.write_text(example.read_text(encoding="utf-8-sig"), encoding="utf-8")
+            print(f">>> 已生成配置文件：{env}（可填入你的 API key）")
+        except OSError:
+            pass
+
+
 def main() -> None:
+    _ensure_env_file()
     p = argparse.ArgumentParser(description="F1 Race Engineer launcher")
     p.add_argument("--web", action="store_true", help="直接进入网页模式")
     p.add_argument("--voice", action="store_true", help="直接进入语音模式")

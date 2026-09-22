@@ -3,7 +3,7 @@
 Listens for a configured key while the game is fullscreen. Raw Input is the
 same standard API the game itself uses; we only *subscribe*, never intercept.
 
-Default key: NUMPAD 0 (VK 0x60). Change TRIGGER_VK to remap.
+Default key: NUMPAD + (VK 0x6B). Change TRIGGER_VK to remap.
 
 Emits a debounced "tap" event: one full press+release counts as one tap, so the
 caller can use tap-to-start / tap-to-stop.
@@ -23,7 +23,7 @@ RID_INPUT = 0x10000003
 RIDEV_INPUTSINK = 0x00000100
 RIM_TYPEKEYBOARD = 1
 
-TRIGGER_VK = 0x60  # VK_NUMPAD0 (小键盘 0)
+TRIGGER_VK = 0x6B  # VK_ADD (小键盘 +)
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32

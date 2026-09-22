@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -21,6 +22,12 @@ import uuid
 from typing import Dict, List, Optional, Tuple
 
 from config import get_config
+from paths import app_root
+
+# Models live beside the app (stt_models/), never in the C: HF cache. This is
+# what makes the full pack self-contained / offline.
+_MODELS_DIR = app_root() / "stt_models"
+_STT_LIB = app_root() / "stt_lib"
 
 _MIME_SUFFIX = {
     "audio/webm": ".webm",
@@ -123,6 +130,11 @@ class LocalWhisperSTT(STTEngine):
 
     def __init__(self, input_device: Optional[str] = None,
                  model_size: Optional[str] = None) -> None:
+        # Make the bundled faster-whisper importable and keep model downloads
+        # out of the C: drive / HF cache (project-local stt_lib + stt_models).
+        if str(_STT_LIB) not in sys.path:
+            sys.path.insert(0, str(_STT_LIB))
+        os.environ.setdefault("HF_HOME", str(_MODELS_DIR))
         cfg = get_config()
         self.model_size = (model_size or cfg.get("STT_LOCAL_MODEL", "small")).strip()
         self.language = cfg.get("STT_LANGUAGE", "zh").strip()
@@ -139,13 +151,39 @@ class LocalWhisperSTT(STTEngine):
     def available(self) -> bool:
         return self._whisper is not None
 
-    def transcribe(self, audio: bytes, mime: str) -> str:
+    def load(self) -> None:
+        """Eagerly load the model (used by the voice preloader).
+
+        download_root points at the bundled stt_models/, so with the model
+        present this is fully offline; without it, it downloads there instead
+        of the C: drive.
+        """
+        if self._model is None and self.available:
+            # Force CPU int8: faster-whisper otherwise auto-selects CUDA and
+            # fails on machines without cublas64_12.dll. CPU keeps the game's
+            # GPU free and needs no CUDA install (see KNOWN_ISSUES ISSUE-3).
+            self._model = self._whisper(
+                self.model_size, device="cpu", compute_type="int8",
+                cpu_threads=self.cpu_threads,
+                download_root=str(_MODELS_DIR))
+
+    def transcribe(self, audio, mime: str = "") -> str:
+        """Transcribe raw audio.
+
+        Accepts either a float32 numpy array (in-memory PCM from the local
+        voice stack) or encoded ``bytes`` (webm/wav from the browser PTT path).
+        faster-whisper handles numpy directly; bytes are written to a temp file.
+        """
         if not self.available:
             raise RuntimeError("faster-whisper not installed")
-        if self._model is None:  # lazy model load keeps startup fast
-            self._model = self._whisper(
-                self.model_size, compute_type="int8",
-                cpu_threads=self.cpu_threads)
+        self.load()  # no-op once loaded
+
+        # numpy / list of samples -> transcribe in memory, no temp file.
+        if not isinstance(audio, (bytes, bytearray)):
+            segments, _info = self._model.transcribe(
+                audio, language=self.language or None)
+            return "".join(s.text for s in segments).strip()
+
         mime = (mime or "audio/webm").split(";")[0].strip()
         suffix = _MIME_SUFFIX.get(mime, ".bin")
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:

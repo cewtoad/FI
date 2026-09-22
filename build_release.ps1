@@ -83,27 +83,31 @@ function Build-Full {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-    # 1) application source (no build/test junk)
-    $keep = @(
-        "*.py", "lib", ".env.example", "README.md", "LICENSE",
-        "启动.bat", "FIRST_RUN.txt"
-    )
-    foreach ($item in $keep) {
-        Get-ChildItem -Path (Join-Path $root $item) -Force -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                if ($_.Name -eq "build_lib" -or $_.Name -eq "dist" -or
-                    $_.Name -eq "build" -or $_.Name -eq "sessions" -or
-                    $_.Name -eq "__pycache__") { return }
-                Copy-Item $_.FullName (Join-Path $stage $_.Name) -Recurse -Force
-            }
+    # 1) application source.
+    #    - namespace packages (lib) are copied AS A DIRECTORY so `from lib.x`
+    #      keeps working;
+    #    - loose *.py files are copied individually.
+    $skipNames = @("build_lib", "dist", "build", "sessions", "__pycache__",
+                   "stt_lib", "stt_models", "python-embed", "png_src", ".git")
+
+    # 1a) lib/ (must stay a package directory named "lib")
+    Copy-Item (Join-Path $root "lib") (Join-Path $stage "lib") -Recurse -Force
+    Get-ChildItem (Join-Path $stage "lib") -Recurse -Directory -Filter "__pycache__" |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    # 1b) top-level .py files (skip tests/dev tools)
+    $skipPy = @("tests_", "test_", "bench_", "capture", "probe_gamepad",
+                "fake_data", "voice_runner", "tool_stt_mic", "download_stt_model")
+    Get-ChildItem -Path $root -Filter "*.py" -File | ForEach-Object {
+        $n = $_.Name
+        if ($skipPy | Where-Object { $n.StartsWith($_) }) { return }
+        Copy-Item $_.FullName (Join-Path $stage $n) -Force
     }
-    # Do not ship the test scripts / dev-only tools.
-    Get-ChildItem -Path $stage -Filter "tests_*.py" | Remove-Item -Force
-    Get-ChildItem -Path $stage -Filter "test_*.py" | Remove-Item -Force
-    foreach ($t in @("bench_gpu.py","bench_stt.py","capture.py","capture_live.py",
-                     "probe_gamepad.py","fake_data.py","voice_runner.py",
-                     "tool_stt_mic.py","download_stt_model.py")) {
-        Remove-Item (Join-Path $stage $t) -Force -ErrorAction SilentlyContinue
+
+    # 1c) static files
+    foreach ($f in @(".env.example", "README.md", "LICENSE", "启动.bat", "FIRST_RUN.txt")) {
+        $src = Join-Path $root $f
+        if (Test-Path $src) { Copy-Item $src (Join-Path $stage $f) -Force }
     }
 
     # 2) local voice dependencies + model (the whole point of the full pack)

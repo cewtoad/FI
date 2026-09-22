@@ -8,6 +8,8 @@ secrets.json
 # ---- 运行时生成的数据 ----
 sessions/
 *.log
+*.err
+*.pid
 *.tmp
 capture_report.json
 capture_live_report.json

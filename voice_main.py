@@ -1,4 +1,4 @@
-"""Unified voice entry: telemetry receiver + push-to-talk voice Q&A in one process.
+﻿"""Unified voice entry: telemetry receiver + push-to-talk voice Q&A in one process.
 
 Model:
     main thread   -> Raw Input message loop (NUM0 tap starts/stops recording)
@@ -92,7 +92,7 @@ class VoiceApp:
         self._timer = threading.Timer(MAX_RECORD_S + 0.5, self._auto_stop)
         self._timer.daemon = True
         self._timer.start()
-        print(f"[voice] ● 录音中…（再按小键盘0停止，{MAX_RECORD_S:.0f}s 自动停）",
+        print(f"[voice] ● 录音中…（再按小键盘+停止，{MAX_RECORD_S:.0f}s 自动停）",
               flush=True)
 
     def _auto_stop(self) -> None:
@@ -144,7 +144,11 @@ class VoiceApp:
                 return
             print(f"[voice] 识别中…（{dur:.1f}s）", flush=True)
             t0 = time.time()
-            question = stt.transcribe(audio)
+            try:
+                question = stt.transcribe(pcm)
+            except Exception as e:  # noqa: BLE001 - keep the voice loop alive
+                print(f"[voice] 识别失败: {e}", flush=True)
+                return
             print(f"[voice] 识别耗时 {time.time()-t0:.2f}s", flush=True)
             if not question:
                 print("[voice] 没听清", flush=True)
@@ -172,7 +176,7 @@ class VoiceApp:
             print(f"[voice] TTS 耗时 {time.time()-t2:.2f}s", flush=True)
         finally:
             self._busy = False
-            print("[voice] 就绪，按小键盘0提问", flush=True)
+            print("[voice] 就绪，按小键盘+提问", flush=True)
 
     def _get_stt(self):
         """Return the shared STT engine, building it once under a lock.
@@ -191,25 +195,33 @@ class VoiceApp:
         t = threading.Thread(target=self._run_receiver, daemon=True)
         t.start()
         print(f"遥测接收已启动 (UDP {self.receiver.port})")
+
+        from paths import app_root
+        env_path = app_root() / ".env"
         if self.engineer.configured:
             print("AI 已就绪")
         else:
-            print("⚠ 未配置 AI key，AI 问答不可用")
+            print("⚠ 未配置 AI key：AI 问答不可用（本地快答仍可用：名次/油量/胎温…）")
+            print(f"   → 填 key：编辑 {env_path}")
+            print("     或改用【网页模式】（页面顶部有设置面板，可可视化填写）")
 
         # Preload the STT model in the background so the first question isn't
         # stuck on a ~20s model load.
         def _preload():
-            print("STT 模型加载中…（首次约 20 秒，之后提问即时）", flush=True)
             stt = self._get_stt()
-            if stt is not None and hasattr(stt, "_load"):
-                stt._load()
-                print("STT 就绪。", flush=True)
-            else:
-                print("⚠ STT 不可用。", flush=True)
+            if stt is None:
+                print("⚠ 本地语音不可用：未安装 faster-whisper。")
+                print("   → 请使用【全量语音包】（内含本地语音依赖），")
+                print("     或在 .env 设 STT_PROVIDER=cloud 用云端识别。")
+                return
+            print("STT 模型加载中…（首次约 20 秒，之后提问即时）", flush=True)
+            if hasattr(stt, "load"):
+                stt.load()
+            print("STT 就绪。", flush=True)
         threading.Thread(target=_preload, daemon=True).start()
 
         self.trigger = RawKeyTrigger(on_tap=self._on_tap, vk=TRIGGER_VK)
-        print("按【小键盘 0】提问：按一下开始录音，再按一下结束。Ctrl+C 退出。\n")
+        print("按【小键盘 +】提问：按一下开始录音，再按一下结束。Ctrl+C 退出。\n")
         self.trigger.run_blocking()  # blocks (main thread)
 
 

@@ -67,18 +67,17 @@ class LocalSTT:
 
     def record(self, seconds: float):
         """Blocking record from the configured mic; returns float32 mono array."""
-        import numpy as np
         import sounddevice as sd
         idx = audio.resolve(self.input_device, "input")
-        audio = sd.rec(int(seconds * SR), samplerate=SR, channels=CHANNELS,
-                       dtype="float32", device=idx)
+        pcm = sd.rec(int(seconds * SR), samplerate=SR, channels=CHANNELS,
+                     dtype="float32", device=idx)
         sd.wait()
-        return audio.flatten()
+        return pcm.flatten()
 
-    def transcribe(self, audio) -> str:
+    def transcribe(self, pcm) -> str:
         model = self._load()
         segments, _info = model.transcribe(
-            audio, language=self.language, beam_size=5, vad_filter=True)
+            pcm, language=self.language, beam_size=5, vad_filter=True)
         return "".join(seg.text for seg in segments).strip()
 
 
