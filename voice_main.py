@@ -1,4 +1,4 @@
-﻿"""Unified voice entry: telemetry receiver + push-to-talk voice Q&A in one process.
+"""Unified voice entry: telemetry receiver + push-to-talk voice Q&A in one process.
 
 Model:
     main thread   -> Raw Input message loop (NUM0 tap starts/stops recording)
@@ -195,6 +195,20 @@ class VoiceApp:
         t = threading.Thread(target=self._run_receiver, daemon=True)
         t.start()
         print(f"遥测接收已启动 (UDP {self.receiver.port})")
+
+        # Show which devices will be used (resolved live per take from here
+        # on, so this is just the status at startup).
+        for kind, label in (("input", "🎤 麦克风"), ("output", "🔊 播报")):
+            try:
+                dev = audio.active_device(kind)
+            except Exception as e:  # noqa: BLE001 - audio stack may be absent
+                print(f"{label}: 未检测到（{e}）")
+                continue
+            if dev["id"] is None:
+                print(f"{label}: ⚠ 未检测到可用设备（语音功能需要）")
+            else:
+                tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
+                print(f"{label}: {dev['name']}（{tag}）")
 
         from paths import app_root
         env_path = app_root() / ".env"

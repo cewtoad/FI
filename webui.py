@@ -155,6 +155,17 @@ PAGE = r"""<!doctype html>
     </div>
     <div class="meta" id="setMsg"></div>
     <details class="setupbox">
+      <summary>🎤🔊 语音设备（默认跟随系统正在使用的设备）</summary>
+      <div class="row2" style="margin-top:6px;">
+        <select id="setMic" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;"></select>
+        <select id="setSpk" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;"></select>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:4px;">
+        默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效。
+        当前使用：<span id="audNow" style="color:var(--txt);"></span>
+      </div>
+    </details>
+    <details class="setupbox">
       <summary>游戏内 UDP 遥测怎么设？</summary>
       <div style="font-size:12px;line-height:1.9;margin-top:6px;">
         游戏 <b>设置 → UDP 遥测</b>：<br>
@@ -284,6 +295,43 @@ async function saveSetup(){
 document.getElementById("setSave").onclick = saveSetup;
 document.getElementById("setClose").onclick = () => { document.getElementById("setup").style.display = "none"; };
 document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); document.getElementById("setup").style.display = "block"; window.scrollTo(0,0); };
+// ---- audio devices: follow-system by default, pin optional ----
+async function loadAudio(){
+  try {
+    const r = await fetch("/api/audio"); const d = await r.json();
+    const fill = (sel, list, cur, active) => {
+      sel.innerHTML = "";
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "跟随系统当前设备" + (active && active.name ? "（当前: " + active.name + "）" : "");
+      sel.appendChild(o);
+      for (const dev of (list||[])){
+        const op = document.createElement("option");
+        op.value = dev.name;
+        op.textContent = dev.name + (dev.default ? "（系统默认）" : "");
+        if (cur && dev.name === cur) op.selected = true;
+        sel.appendChild(op);
+      }
+    };
+    fill(document.getElementById("setMic"), d.input, (d.current||{}).input, (d.active||{}).input);
+    fill(document.getElementById("setSpk"), d.output, (d.current||{}).output, (d.active||{}).output);
+    const a = d.active || {};
+    document.getElementById("audNow").textContent =
+      "🎤 " + ((a.input && a.input.name) || "无") + " / 🔊 " + ((a.output && a.output.name) || "无");
+  } catch(e){}
+}
+["setMic","setSpk"].forEach(id => {
+  document.getElementById(id).onchange = async (ev) => {
+    const kind = id === "setMic" ? "input" : "output";
+    try {
+      await fetch("/api/audio", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({[kind]: ev.target.value})});
+      loadAudio();
+    } catch(e){}
+  };
+});
+document.getElementById("openSet").addEventListener("click", loadAudio);
+loadAudio();
 async function poll(){
   try {
     const r = await fetch("/api/state");
@@ -490,6 +538,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/audio":
             self._send_json(200, {
                 "current": audio.current(),
+                "active": audio.describe()["active"],
                 "input": audio.list_devices("input"),
                 "output": audio.list_devices("output"),
             })
@@ -613,9 +662,12 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         for kind, key in (("input", "input"), ("output", "output")):
-            if body.get(key):
+            # An explicit empty string un-pins the device (follow the system
+            # default); a non-empty string pins it by name fragment.
+            if key in body and body[key] is not None:
                 audio.set_device(kind, str(body[key]).strip())
-        self._send_json(200, {"current": audio.current()})
+        self._send_json(200, {"current": audio.current(),
+                              "active": audio.describe()["active"]})
 
     def _set_profile(self) -> None:
         body = self._read_json()

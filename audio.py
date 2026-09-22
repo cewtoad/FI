@@ -6,9 +6,18 @@ bled the engineer's answer out of the speakers during a race).
 
 Public API:
     list_devices(kind)     -> [{id,name,channels,default}]
-    resolve(fragment, kind)-> int | None    (unique fuzzy match)
-    current()              -> {"input": str, "output": str}
-    set_device(kind, frag) -> str           (persists to .env)
+    resolve(fragment, kind)-> int | None  (unique fuzzy match)
+    default_device(kind)   -> int | None  (system default, re-queried per call)
+    active_device(kind)    -> {id,name,source}  (what a take started NOW uses)
+    current()              -> {"input": str, "output": str}  (configured pins)
+    set_device(kind, frag) -> str  ("" un-pins -> follow the system default)
+
+Device policy for "works on anyone's machine": when nothing is pinned, every
+record/play resolves the system's *current* default device fresh, so swapping
+headsets or switching the Windows default mid-session is picked up by the next
+take. A pinned fragment (AUDIO_INPUT/AUDIO_OUTPUT) still wins while it matches;
+if it goes missing we warn loudly and follow the default for that take.
+
 
 sounddevice is imported lazily so the panel/web UI runs without it.
 """
@@ -17,7 +26,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from config import get_config
 from paths import app_root
@@ -84,11 +93,81 @@ def current() -> Dict[str, str]:
     }
 
 
+def default_device(kind: str = "input") -> Optional[int]:
+    """The system's current default device id for the direction, or None.
+
+    Re-queried on every call - this is what makes device switching live.
+    """
+    if kind not in _KIND_KEY:
+        raise ValueError("kind must be 'input' or 'output'")
+    try:
+        sd = _sd()
+        idx = sd.default.device[0 if kind == "input" else 1]
+        if idx is not None and idx >= 0:
+            return int(idx)
+    except Exception:
+        pass
+    return None
+
+
+def _device_name(kind: str, idx: int) -> str:
+    for d in list_devices(kind):
+        if d["id"] == idx:
+            return d["name"]
+    return f"device #{idx}"
+
+
+def active_device(kind: str, fragment: Optional[str] = None) -> Dict[str, Optional[object]]:
+    """Return the device a record/play started RIGHT NOW would use.
+
+    Precedence: explicit ``fragment`` argument (e.g. a CLI override) that
+    matches, then the configured pin (AUDIO_INPUT/AUDIO_OUTPUT), then the
+    system's current default device. The default is re-queried per call, so
+    "different person, different headset" needs no configuration at all.
+
+    Returns {"id": int|None, "name": str|None, "source": str, "note": str}
+    where source is "pinned" | "default" | "none". A pinned fragment that no
+    longer matches falls back to the default for this take, with a loud
+    warning - never a silent wrong-device recording.
+    """
+    if kind not in _KIND_KEY:
+        raise ValueError("kind must be 'input' or 'output'")
+    pinned = fragment if fragment is not None else get_config().get(_KIND_KEY[kind]).strip()
+    note = ""
+    if pinned:
+        idx = resolve(pinned, kind)
+        if idx is not None:
+            return {"id": idx, "name": _device_name(kind, idx), "source": "pinned", "note": note}
+        note = f"指定的设备 '{pinned}' 不存在，本次改用系统当前设备"
+        print(f"[audio] 找不到{kind}设备 '{pinned}'，本次跟随系统当前设备。"
+              f"可用设备: " + (", ".join(d["name"] for d in list_devices(kind)) or "(none)"),
+              flush=True)
+    idx = default_device(kind)
+    if idx is not None:
+        return {"id": idx, "name": _device_name(kind, idx), "source": "default", "note": note}
+    return {"id": None, "name": None, "source": "none", "note": note}
+
+
+def describe() -> Dict[str, Any]:
+    """Both the configured pins and the devices actually in use right now."""
+    cur = current()
+    return {
+        "configured": cur,
+        "active": {
+            "input": active_device("input"),
+            "output": active_device("output"),
+        },
+    }
+
+
 def set_device(kind: str, fragment: str, persist: bool = True) -> str:
+    """Pin a device by name fragment; an empty fragment un-pins it
+    (i.e. go back to following the system's current device)."""
     if kind not in _KIND_KEY:
         raise ValueError("kind must be 'input' or 'output'")
     get_config().set_runtime(_KIND_KEY[kind], fragment, persist=persist)
     return fragment
+
 
 
 def resolve_or_warn(fragment: str, kind: str = "input") -> Optional[int]:

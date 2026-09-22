@@ -75,7 +75,20 @@ class LocalTTS:
         if ch > 1:
             data = data.reshape(-1, ch)
 
-        idx = audio.resolve(self.output_device, "output")
+        # Resolve the output device for THIS playback: pinned fragment if it
+        # matches, else the system's current default (re-queried per play, so
+        # switching headsets / the Windows default is picked up live).
+        dev = audio.active_device("output", self.output_device or None)
+        idx = dev["id"]
+        if idx is None:
+            self.last_error = "没有可用的输出设备（未连接扬声器/耳机？）"
+            print(f"[tts] {self.last_error}", flush=True)
+            return
+        # Only announce the device when it changes, not on every answer.
+        if getattr(self, "_last_dev_name", None) != dev["name"]:
+            self._last_dev_name = dev["name"]
+            tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
+            print(f"🔊 播报设备: {dev['name']}（{tag}）", flush=True)
         # Many gaming headsets expose 4-8 output channels at 44.1/48kHz. Playing
         # a mono WAV at 22.05kHz at them can silently go to the wrong channel or
         # fail to resample. Render to the device's preferred samplerate and
@@ -93,13 +106,6 @@ class LocalTTS:
             data = np.column_stack([data, data])
         elif data.ndim == 2 and data.shape[1] == 1 and max_out >= 2:
             data = np.repeat(data, 2, axis=1)
-
-        try:
-            dev_name = sd.query_devices(idx)["name"] if idx is not None else "(system default)"
-        except Exception:
-            dev_name = str(idx)
-        print(f"[tts] 播放到 [{idx}] {dev_name} @ {dev_sr}Hz "
-              f"{'x'.join(map(str, data.shape))}", flush=True)
 
         self.last_error = None
         try:

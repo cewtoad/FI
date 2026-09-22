@@ -68,9 +68,11 @@ class LocalSTT:
     def record(self, seconds: float):
         """Blocking record from the configured mic; returns float32 mono array."""
         import sounddevice as sd
-        idx = audio.resolve(self.input_device, "input")
+        dev = audio.active_device("input", self.input_device or None)
+        if dev["id"] is None:
+            raise RuntimeError("没有可用的输入设备（未连接麦克风？）")
         pcm = sd.rec(int(seconds * SR), samplerate=SR, channels=CHANNELS,
-                     dtype="float32", device=idx)
+                     dtype="float32", device=dev["id"])
         sd.wait()
         return pcm.flatten()
 
@@ -104,7 +106,17 @@ class StreamingRecorder:
         import sounddevice as sd
         self._frames = []
         self._recording = True
-        idx = audio.resolve_or_warn(self.input_device, "input")
+        # Resolve the device to use for THIS take: pinned fragment if it
+        # matches, else the system's current default (re-queried each start,
+        # so switching headsets / the Windows default is picked up live).
+        dev = audio.active_device("input", self.input_device or None)
+        if dev["id"] is None:
+            self._recording = False
+            self.last_error = "没有可用的输入设备（未连接麦克风？）"
+            raise RuntimeError(self.last_error)
+        tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
+        print(f"🎙 麦克风: {dev['name']}（{tag}）", flush=True)
+        idx = dev["id"]
 
         def _cb(indata, frames, time_info, status):
             if self._recording:
