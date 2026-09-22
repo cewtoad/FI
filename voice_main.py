@@ -198,14 +198,14 @@ class VoiceApp:
 
         # Show which devices will be used (resolved live per take from here
         # on, so this is just the status at startup).
-        for kind, label in (("input", "🎤 麦克风"), ("output", "🔊 播报")):
+        for kind, label in (("input", "麦克风"), ("output", "播报")):
             try:
                 dev = audio.active_device(kind)
             except Exception as e:  # noqa: BLE001 - audio stack may be absent
                 print(f"{label}: 未检测到（{e}）")
                 continue
             if dev["id"] is None:
-                print(f"{label}: ⚠ 未检测到可用设备（语音功能需要）")
+                print(f"{label}: 未检测到可用设备（语音功能需要）")
             else:
                 tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
                 print(f"{label}: {dev['name']}（{tag}）")
@@ -215,7 +215,7 @@ class VoiceApp:
         if self.engineer.configured:
             print("AI 已就绪")
         else:
-            print("⚠ 未配置 AI key：AI 问答不可用（本地快答仍可用：名次/油量/胎温…）")
+            print("未配置 AI key：AI 问答不可用（本地快答仍可用：名次/油量/胎温…）")
             print(f"   → 填 key：编辑 {env_path}")
             print("     或改用【网页模式】（页面顶部有设置面板，可可视化填写）")
 
@@ -224,7 +224,7 @@ class VoiceApp:
         def _preload():
             stt = self._get_stt()
             if stt is None:
-                print("⚠ 本地语音不可用：未安装 faster-whisper。")
+                print("本地语音不可用：未安装 faster-whisper。")
                 print("   → 请使用【全量语音包】（内含本地语音依赖），")
                 print("     或在 .env 设 STT_PROVIDER=cloud 用云端识别。")
                 return

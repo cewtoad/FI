@@ -115,7 +115,7 @@ class StreamingRecorder:
             self.last_error = "没有可用的输入设备（未连接麦克风？）"
             raise RuntimeError(self.last_error)
         tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
-        print(f"🎙 麦克风: {dev['name']}（{tag}）", flush=True)
+        print(f"[voice] 麦克风: {dev['name']}（{tag}）", flush=True)
         idx = dev["id"]
 
         def _cb(indata, frames, time_info, status):

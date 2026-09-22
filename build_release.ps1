@@ -105,7 +105,8 @@ function Build-Full {
     }
 
     # 1c) static files
-    foreach ($f in @(".env.example", "README.md", "LICENSE", "启动.bat", "FIRST_RUN.txt")) {
+    foreach ($f in @(".env.example", "README.md", "LICENSE", "启动.bat",
+                     "整体测试.bat", "FIRST_RUN.txt")) {
         $src = Join-Path $root $f
         if (Test-Path $src) { Copy-Item $src (Join-Path $stage $f) -Force }
     }

@@ -88,7 +88,7 @@ class LocalTTS:
         if getattr(self, "_last_dev_name", None) != dev["name"]:
             self._last_dev_name = dev["name"]
             tag = "已指定" if dev["source"] == "pinned" else "跟随系统当前设备"
-            print(f"🔊 播报设备: {dev['name']}（{tag}）", flush=True)
+            print(f"[tts] 播报设备: {dev['name']}（{tag}）", flush=True)
         # Many gaming headsets expose 4-8 output channels at 44.1/48kHz. Playing
         # a mono WAV at 22.05kHz at them can silently go to the wrong channel or
         # fail to resample. Render to the device's preferred samplerate and
