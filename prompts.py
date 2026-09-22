@@ -31,10 +31,15 @@ SYSTEM_PROMPT = """你是车手的赛车工程师(race engineer),通过无线电
 - 车手问"发生了吗/是不是"这类判断问题时,先看【最近事件】,再用【当前数据】佐证。
   例:数据说"被 X 超过,掉到 P2",就明确回答"是的,X 超了你,现在 P2"。
 - 时间用 分:秒.毫秒(如 1:23.055),差距用秒或毫秒。
+- 差距方向:gap 类数值(如 落后领先者/落后前车/排行榜的"落后")**正数一律表示你落后**。
+  例:落后领先者 19.982s = 你在领先者后面 19.982 秒,绝不能读成"你领先 19.982 秒"。
+  只有 position=1 才是领先。判断领先/落后以 position(名次)为准,不看 gap 字面。
 
 禁止:
 - 不要输出思考、解释、markdown、列表符号、编号。
-- 不要报流水账。只给车手听的那一句。"""
+- 不要报流水账。只给车手听的那一句。
+- 不要主动补充车手没问的信息,不加"注意/另外/目前"式的额外提醒。
+  除非车手问的正是那件事。例:问"我圈速多少",只答圈速,别附加"正对前车发起攻击"。"""
 
 
 def build_snapshot_text(facts: Dict[str, Any], notes: list,
@@ -59,14 +64,14 @@ def build_snapshot_text(facts: Dict[str, Any], notes: list,
         for n in notes:
             lines.append(f"- {n}")
     if leaderboard:
-        lines.append("【全场排名】(P车手/轮胎/落后领先)")
+        lines.append("【全场排名】(格式:P 车手 轮胎 该车落后领先者的秒数)")
         for row in _trim_leaderboard(leaderboard):
             if row is None:
                 lines.append("...")
                 continue
             mark = "*" if row.get("is_player") else " "
             gap = (row.get("gap_to_leader_ms") or 0) / 1000.0
-            gap_s = "领先" if row["position"] == 1 else f"+{gap:.1f}s"
+            gap_s = "领先全场" if row["position"] == 1 else f"落后 {gap:.1f}s"
             lines.append(
                 f"{row['position']}.{mark}{row['driver']} {row.get('tyre') or '?'} {gap_s}")
     return "\n".join(lines)
@@ -92,13 +97,14 @@ def _trim_leaderboard(leaderboard: list, top: int = 3) -> list:
 
 
 def build_messages(question: str, summary: Dict[str, Any],
-                   history: list | None = None) -> list:
+                   history: list | None = None, profile: Any = None) -> list:
     """Assemble the message list for the chat API.
 
     Args:
         question: the driver's question text.
         summary: output of Summariser.summarise().
         history: optional short list of prior {role, content} turns.
+        profile: optional profiles.Profile controlling style and history depth.
     """
     facts = summary.get("facts", {})
     notes = summary.get("notes", [])
@@ -106,8 +112,15 @@ def build_messages(question: str, summary: Dict[str, Any],
     recent_events = summary.get("recent_events")
     snapshot = build_snapshot_text(facts, notes, leaderboard, recent_events)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system = SYSTEM_PROMPT
+    max_history = 4
+    if profile is not None:
+        if getattr(profile, "style", ""):
+            system = f"{SYSTEM_PROMPT}\n\n{profile.style}"
+        max_history = getattr(profile, "max_history", max_history)
+
+    messages = [{"role": "system", "content": system}]
     if history:
-        messages.extend(history[-4:])  # cap context to keep tokens low
+        messages.extend(history[-max_history:])
     messages.append({"role": "user", "content": f"{snapshot}\n\n车手提问: {question}"})
     return messages

@@ -20,16 +20,23 @@ from stt_client import STTEngine, make_stt
 from tts_client import TTSEngine, make_tts
 
 
+_UNSET = object()
+
+
 class VoiceLink:
-    """One-shot voice question processing around the existing engineer."""
+    """One-shot voice question processing around the existing engineer.
+
+    ``stt`` / ``tts`` default to auto-detected providers. Pass ``None`` to
+    explicitly disable a side (used by tests and for a text-only link).
+    """
 
     def __init__(self, engineer: Any, state: Any,
-                 stt: Optional[STTEngine] = None,
-                 tts: Optional[TTSEngine] = None) -> None:
+                 stt: Any = _UNSET,
+                 tts: Any = _UNSET) -> None:
         self.engineer = engineer
         self.state = state
-        self.stt = stt if stt is not None else make_stt()
-        self.tts = tts if tts is not None else make_tts()
+        self.stt = make_stt() if stt is _UNSET else stt
+        self.tts = make_tts() if tts is _UNSET else tts
 
     # ------------------------------------------------------------ status
 

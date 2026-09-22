@@ -13,14 +13,14 @@ No config, no IPC, no async event bus, no network. Plain CPU-bound aggregation.
 
 from __future__ import annotations
 
+import copy
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 from lib.delta import LapDeltaManager
 from lib.f1_types import (F1PacketType, F1Utils, LapHistoryData,
                           PacketEventData)
-from lib.fuel_rate_recommender import FuelRateRecommender, FuelRemainingPerLap
-from lib.rolling_history import RollingHistory
 from lib.fuel_rate_recommender import FuelRateRecommender, FuelRemainingPerLap
 from lib.rolling_history import RollingHistory
 
@@ -101,6 +101,15 @@ class TelemetryState:
         self._pending_diff_event: Optional[str] = None
         self._pending_diff_until: float = 0.0
 
+        # Frozen snapshot: the receiver thread builds an immutable deep copy at
+        # most SNAPSHOT_HZ times a second; every consumer reads that frozen copy
+        # under a lock instead of the live (mutating) structures. This removes
+        # the reader/writer races in the web and voice paths.
+        self._snap_lock = threading.Lock()
+        self._frozen: Dict[str, Any] = {}
+        self._frozen_at: float = 0.0
+        self._snap_dirty: bool = True
+
     # ---------------------------------------------------------------- session
 
     def note_header(self, header) -> bool:
@@ -162,6 +171,11 @@ class TelemetryState:
             self.packet_errors[key] = self.packet_errors.get(key, 0) + 1
             if self._error_logger is not None:
                 self._error_logger.warning("state.process failed for %s: %r", pid, e)
+        finally:
+            # Live state changed: the frozen snapshot is now stale. The
+            # receiver thread rebuilds it (throttled); direct callers get a
+            # fresh build on the next snapshot().
+            self.mark_dirty()
 
     def _dispatch(self, packet) -> None:
         header = packet.m_header
@@ -692,8 +706,50 @@ class TelemetryState:
 
     # -------------------------------------------------------------- snapshot
 
+    # How often (max) the frozen snapshot is rebuilt.
+    SNAPSHOT_HZ = 2.0
+
+    def mark_dirty(self) -> None:
+        """Flag that live state changed and the frozen copy is stale."""
+        self._snap_dirty = True
+
+    def refresh_snapshot(self, force: bool = False) -> None:
+        """Rebuild the frozen snapshot if stale and older than 1/SNAPSHOT_HZ.
+
+        Called from the receiver thread after each accepted packet; cheap when
+        throttled (a couple of deep copies per second, not per packet).
+        """
+        now = time.monotonic()
+        if not force and not self._snap_dirty:
+            return
+        if not force and (now - self._frozen_at) < (1.0 / self.SNAPSHOT_HZ):
+            return
+        frozen = self._build_snapshot()
+        with self._snap_lock:
+            self._frozen = frozen
+            self._frozen_at = now
+            self._snap_dirty = False
+
     def snapshot(self) -> Dict[str, Any]:
-        """Return the current state plus analyzer results as a plain dict."""
+        """Return a frozen state snapshot (deep copy, safe to read anywhere).
+
+        Consumers on other threads (HTTP, voice) read the frozen copy the
+        receiver thread publishes. When the state has changed since that copy
+        was built (e.g. code/tests driving state directly, or the receiver
+        throttled by SNAPSHOT_HZ), a fresh copy is built on demand so callers
+        always see current data.
+        """
+        with self._snap_lock:
+            stale = self._snap_dirty or not self._frozen
+            frozen = self._frozen
+        if stale:
+            self.refresh_snapshot(force=True)
+            with self._snap_lock:
+                frozen = self._frozen
+        return frozen
+
+    def _build_snapshot(self) -> Dict[str, Any]:
+        """Build a deep-copied snapshot from the live state (writer thread)."""
         delta = self.delta.get_delta()
         fuel: Dict[str, Any] = {}
         if self.fuel is not None:
@@ -714,23 +770,25 @@ class TelemetryState:
                 "total_laps": self.total_laps,
                 "player_car_index": self.player_car_index,
             },
-            "latest": self.latest,
+            # Deep copies: consumers must never hold a live reference into the
+            # mutating state (the old snapshot() exposed self.latest directly).
+            "latest": copy.deepcopy(self.latest),
             "delta": None if delta is None else {
                 "delta_ms": delta.delta_ms,
                 "best_lap_num": delta.best_lap_num,
                 "distance_m": delta.distance_m,
             },
-            "fuel": fuel,
+            "fuel": dict(fuel),
             "trends": {
-                "lap_times_ms": self.lap_times_ms.values(),
+                "lap_times_ms": list(self.lap_times_ms.values()),
                 "best_lap_ms": self._best_lap_ms,
                 # All completed laps incl. invalid ones (each {lap_num,
                 # lap_time_ms, valid}); lap_times_ms above is valid-only.
-                "lap_records": self.lap_records.values(),
+                "lap_records": list(self.lap_records.values()),
             },
             "packet_counts": dict(self.packet_counts),
             "packet_errors": dict(self.packet_errors),
-            "leaderboard": self.leaderboard,
-            "position_context": self.latest.get("position_context"),
-            "events": self.events[-6:],
+            "leaderboard": copy.deepcopy(self.leaderboard),
+            "position_context": copy.deepcopy(self.latest.get("position_context")),
+            "events": copy.deepcopy(self.events[-6:]),
         }

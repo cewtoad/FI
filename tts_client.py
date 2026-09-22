@@ -16,7 +16,7 @@ import os
 import sys
 from typing import Optional
 
-from ai_client import load_dotenv
+from config import get_config
 
 
 class TTSEngine:
@@ -46,7 +46,7 @@ class EdgeTTS(TTSEngine):
     mime = "audio/mpeg"
 
     def __init__(self) -> None:
-        cfg = {**load_dotenv(), **os.environ}
+        cfg = get_config()
         self.voice = cfg.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural").strip()
         try:
             import edge_tts
@@ -89,7 +89,7 @@ class SapiTTS(TTSEngine):
     mime = "audio/wav"
 
     def __init__(self) -> None:
-        cfg = {**load_dotenv(), **os.environ}
+        cfg = get_config()
         self.voice = cfg.get("TTS_SAPI_VOICE", "").strip()
         self.timeout = float(cfg.get("TTS_TIMEOUT", "30"))
 
@@ -129,7 +129,7 @@ class SapiTTS(TTSEngine):
 
 def make_tts() -> Optional[TTSEngine]:
     """Pick the TTS provider from config (explicit wins, else auto-detect)."""
-    cfg = {**load_dotenv(), **os.environ}
+    cfg = get_config()
     provider = cfg.get("TTS_PROVIDER", "").strip().lower()
     if provider == "off":
         return None

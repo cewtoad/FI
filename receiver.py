@@ -139,6 +139,12 @@ class TelemetryReceiver:
             return
         self.frames += 1
         self.state.process(packet)
+        # Publish a frozen snapshot (throttled to SNAPSHOT_HZ internally) so
+        # readers on other threads never touch the live, mutating structures.
+        try:
+            self.state.refresh_snapshot()
+        except Exception:  # noqa: BLE001 - a snapshot failure must not stop RX
+            pass
         if self.on_packet is not None:
             self.on_packet(packet)
 

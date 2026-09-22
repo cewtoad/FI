@@ -19,26 +19,19 @@ _HERE = Path(__file__).parent
 if str(_HERE / "stt_lib") not in sys.path:
     sys.path.insert(0, str(_HERE / "stt_lib"))
 
+import audio
 from tts_client import SapiTTS, make_tts
 
 
 class LocalTTS:
-    def __init__(self, output_device: str = "G733") -> None:
-        self.output_device = output_device
+    def __init__(self, output_device: str = "") -> None:
+        self.output_device = output_device or audio.current()["output"]
         self.engine = make_tts() or SapiTTS()
         self.last_error: Optional[str] = None
 
     @property
     def available(self) -> bool:
         return self.engine is not None and self.engine.available
-
-    def _device_index(self):
-        import sounddevice as sd
-        for i, d in enumerate(sd.query_devices()):
-            if self.output_device.lower() in d["name"].lower() \
-                    and d["max_output_channels"] > 0:
-                return i
-        return None
 
     def speak(self, text: str) -> None:
         """Render text to speech and play it on the output device (blocking)."""
@@ -63,5 +56,5 @@ class LocalTTS:
         data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         if ch > 1:
             data = data.reshape(-1, ch)
-        sd.play(data, sr, device=self._device_index())
+        sd.play(data, sr, device=audio.resolve(self.output_device, "output"))
         sd.wait()

@@ -16,7 +16,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any, Dict, Optional
 
 SESSION_DIR = Path(__file__).parent / "sessions"
@@ -30,7 +30,7 @@ class SessionRecorder:
         self.dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.path = self.dir / f"session_{stamp}.json"
-        self._lock = Lock()
+        self._lock = RLock()  # record_state holds it while calling _flush
         self._lap_keys = set()
         self.data: Dict[str, Any] = {
             "started": datetime.now().isoformat(timespec="seconds"),
@@ -49,8 +49,13 @@ class SessionRecorder:
         """Pull new completed laps out of a state snapshot and store them.
 
         Uses the game's SESSION_HISTORY (authoritative, has all laps) plus the
-        current lap snapshot for tyre/fuel context.
+        current lap snapshot for tyre/fuel context. Thread-safe: runs on the
+        receiver thread and may overlap a record_qa on the HTTP thread.
         """
+        with self._lock:
+            self._record_state_locked(snapshot)
+
+    def _record_state_locked(self, snapshot: Dict[str, Any]) -> None:
         latest = snapshot.get("latest", {})
         sess = latest.get("session", {})
         self.data["session_uid"] = snapshot.get("session", {}).get("session_uid")
@@ -139,7 +144,7 @@ class SessionRecorder:
     # --------------------------------------------------------------- files
 
     def _flush(self) -> None:
-        with self._lock:
+        with self._lock:  # RLock: re-entrant when called from record_state
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2),
                            encoding="utf-8")

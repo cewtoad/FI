@@ -10,7 +10,7 @@
 
 ## 特性
 
-- 🏎 **实时遥测解析** — 支持 F1 2023–2026 全部 16 种 UDP packet，适配 2026 Season Pack（24 车）
+- 🏎 **实时遥测解析** — 支持 F1 2023–2026 全部 17 种 UDP packet，适配 2026 Season Pack（24 车）
 - 📊 **全场位置表** — 位置 / 车手 / 圈数 / 轮胎 / 胎龄 / 差距
 - ⏱ **圈速分析** — 圈速历史、分段计时、vs 最快圈 delta、无效圈过滤
 - ⛽ **油耗策略** — 消耗率、剩余圈数、完赛油量预测
@@ -20,6 +20,10 @@
 - 🎧 **观赛模式** — 焦点自动跟随被观看的车辆
 - 📝 **会话录制** — 自动生成 JSON（原始）+ TXT（可读）报告
 - 🖥 **双界面** — 网页面板 + 终端面板
+- 🔌 **多模型** — 任意 OpenAI 兼容端点（DeepSeek/OpenAI/本地 Ollama…），运行时可切换 + 故障回退
+- ⚡ **本地快答** — "我P几/还剩几圈/油够不够"等问题不经过 AI，直接由遥测回答（零延迟、零成本）
+- 🎚 **智能档位** — fast / standard / deep 三档，控制回答长度与深度
+- 🔊 **音频设备热切换** — 网页面板选麦克风/耳机，拔插后自动重连
 
 ---
 
@@ -32,13 +36,16 @@
 
 ### 2. 配置
 
-复制 `.env.example` 为 `.env`，填入你的 DeepSeek key：
+复制 `.env.example` 为 `.env`，填入你的 API key：
 
 ```
-DEEPSEEK_API_KEY=sk-你的key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-flash
+LLM_API_KEY=sk-你的key
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-flash
 ```
+
+> 支持任意 **OpenAI 兼容**端点。旧的 `DEEPSEEK_*` 变量仍会被读取（作为回退），
+> 现有 `.env` 无需改动即可继续使用。
 
 ### 3. 游戏设置
 
@@ -104,10 +111,50 @@ py -3.12 download_stt_model.py small
 py -3.12 voice_main.py
 ```
 
-**可选参数**：`--input G733 --output G733`（按设备名片段选麦克风/输出）
+**可选参数**：`--input <片段> --output <片段>`（按设备名片段选麦克风/输出）
 修改触发键：编辑 `voice_trigger.py` 的 `TRIGGER_VK`。
 
+**不知道设备叫什么名字？**
+
+```
+py -3.12 voice_main.py --list-audio
+```
+
+设备也可在 `.env` 里固定（`AUDIO_INPUT` / `AUDIO_OUTPUT`），或在网页面板的
+`/api/audio` 运行时切换。设备名找不到时会**明确报错**，不会静默改用系统默认设备
+（避免比赛时从音箱外放）。
+
 > `stt_lib/` 和 `stt_models/` 体积较大，已在 `.gitignore` 中排除，需按上述步骤自行下载。
+
+---
+
+## 网页 API
+
+网页面板（`run.py --web`）同时暴露一组 JSON 接口，方便脚本化或二次开发：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/state` | 当前总结 + 接收统计 + 语音状态 |
+| POST | `/api/ask` | `{question}` → AI 回答（本地快答优先） |
+| POST | `/api/ask_voice` | 上传音频 → 识别 → 回答 |
+| GET | `/api/llm` | 当前端点 / 模型 / 档位 / 快答命中率 |
+| POST | `/api/llm` | 热切换 `{base_url?, api_key?, model?}` |
+| GET | `/api/models` | 列出端点支持的模型 |
+| GET | `/api/profile` | 当前档位 + 可用档位 |
+| POST | `/api/profile` | 热切换 `{profile: fast\|standard\|deep}` |
+| GET | `/api/audio` | 列出麦克风/输出设备 + 当前选择 |
+| POST | `/api/audio` | 热切换 `{input?, output?}` |
+| GET | `/api/export` / `/api/export_txt` | 下载会话报告 |
+
+**AI 档位**
+
+| 档位 | 特点 | 适用 |
+|---|---|---|
+| `fast` | 一句话，禁止展开 | 比赛中快速确认 |
+| `standard` | 现行默认 | 常规问答 |
+| `deep` | 2-3 句，主动给策略权衡 | 冷思考 / 进站规划 |
+
+> 三档只改**表达层**。所有数值计算始终在本地完成，AI 只负责措辞。
 
 ### 为什么用 Raw Input / 本地识别？
 
@@ -170,11 +217,16 @@ flowchart TD
 ```
 F1_TR/
 ├── run.py              主入口（--web 网页 / 终端面板）
+├── app.py              组合根：统一装配 state/receiver/engineer/recorder
 ├── voice_main.py       语音入口（遥测 + 语音问答，单进程）
 ├── receiver.py         单进程 UDP 收包 + 解析调度
 ├── state.py            遥测状态聚合（快照/位置表/事件/趋势）
 ├── summariser.py       总结层：把状态压成 facts + notes
-├── ai_client.py        DeepSeek API 客户端（标准库）
+├── config.py           配置中心（.env + 运行时可改，带锁）
+├── llm_client.py       OpenAI 兼容客户端 + make_llm（多端点 / 回退）
+├── ai_client.py        兼容层（`DeepSeekClient` 等旧名字）
+├── profiles.py         AI 档位（fast/standard/deep）+ 本地快答路由
+├── audio.py            音频设备解析（列出 / 模糊匹配 / 热切换）
 ├── prompts.py          系统提示词 + 快照文本构造
 ├── engineer.py         问答引擎
 ├── webui.py            网页 UI

@@ -210,6 +210,16 @@ class PacketHeader:
                 self.m_playerCarIndex == other.m_playerCarIndex and
                 self.m_secondaryPlayerCarIndex == other.m_secondaryPlayerCarIndex)
 
+    def __hash__(self) -> int:
+        """Hash consistent with __eq__ (Python clears __hash__ when __eq__ is
+        defined; without this, PacketHeader is unhashable)."""
+        return hash((
+            self.m_packetFormat, self.m_gameYear, self.m_gameMajorVersion,
+            self.m_gameMinorVersion, self.m_packetVersion, self.m_packetId,
+            self.m_sessionUID, self.m_sessionTime, self.m_frameIdentifier,
+            self.m_overallFrameIdentifier, self.m_playerCarIndex,
+            self.m_secondaryPlayerCarIndex))
+
     def __ne__(self, other: Any) -> bool:
         """Check if this PacketHeader is not equal to another.
 

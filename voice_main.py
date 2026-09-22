@@ -20,9 +20,11 @@ import threading
 import time
 from typing import Optional
 
+import audio
 from engineer import Engineer
 from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from state import TelemetryState
+from stt_client import make_stt
 from voice_stt import StreamingRecorder
 from voice_trigger import RawKeyTrigger, TRIGGER_VK
 from voice_tts import LocalTTS
@@ -45,9 +47,10 @@ class VoiceApp:
                                           max_seconds=MAX_RECORD_S)
         self.tts = LocalTTS(output_device=output_dev)
         self.engineer = Engineer()
-        self.input_dev = input_dev
+        self.input_dev = input_dev or audio.current()["input"]
         # Load the STT model ONCE (loading takes ~20s; never do it per-answer).
         self._stt = None
+        self._stt_lock = threading.Lock()
 
         self._recording = False
         self._busy = False
@@ -77,7 +80,7 @@ class VoiceApp:
             if not self._recording:
                 self._start_recording()
             else:
-                self._stop_and_answer()
+                self._stop_and_answer_locked()
 
     def _start_recording(self) -> None:
         try:
@@ -96,33 +99,49 @@ class VoiceApp:
         with self._lock:
             if self._recording:
                 print("[voice] 超时，自动停止", flush=True)
-                self._stop_and_answer()
+                self._stop_and_answer_locked()
 
-    def _stop_and_answer(self) -> None:
+    def _stop_and_answer_locked(self) -> None:
+        """Stop the recorder and dispatch processing. Caller holds ``_lock``."""
         self._recording = False
         if self._timer:
             self._timer.cancel()
             self._timer = None
         try:
-            audio = self.recorder.stop()
+            samples = self.recorder.collected_samples()
+        except Exception:
+            samples = 0
+        if samples < StreamingRecorder.MIN_SAMPLES:
+            # ISSUE-1: a stop that lands before the first audio callback (or a
+            # genuine tap-on/tap-off) yields an empty buffer. Report it clearly
+            # instead of sending silence to the STT path.
+            try:
+                self.recorder.stop()
+            except Exception:
+                pass
+            print("[voice] 录音太短（没收到音频），已忽略", flush=True)
+            return
+        try:
+            pcm = self.recorder.stop()
         except Exception as e:  # noqa: BLE001
             print(f"[voice] 停止录音失败: {e}", flush=True)
             return
         self._busy = True
-        threading.Thread(target=self._process, args=(audio,), daemon=True).start()
+        threading.Thread(target=self._process, args=(pcm,), daemon=True).start()
 
-    def _process(self, audio) -> None:
+    def _process(self, pcm) -> None:
         try:
-            dur = len(audio) / 16000.0 if audio is not None else 0
+            dur = len(pcm) / 16000.0 if pcm is not None else 0
             if dur < 0.3:
                 print("[voice] 录音太短，忽略", flush=True)
                 return
 
-            # STT (reuse a single loaded model)
-            if self._stt is None:
-                from voice_stt import LocalSTT
-                self._stt = LocalSTT(model_size="small", input_device=self.input_dev)
-            stt = self._stt
+            # STT (reuse a single loaded model; config-driven so .env's
+            # STT_LOCAL_MODEL / STT_LOCAL_THREADS apply).
+            stt = self._get_stt()
+            if stt is None:
+                print("[voice] STT 不可用（未安装 faster-whisper）", flush=True)
+                return
             print(f"[voice] 识别中…（{dur:.1f}s）", flush=True)
             t0 = time.time()
             question = stt.transcribe(audio)
@@ -135,14 +154,15 @@ class VoiceApp:
             # Engineer with the live snapshot
             snap = self.state.snapshot()
             if not self.engineer.configured:
-                answer = "（未配置 DeepSeek key）"
+                answer = "（未配置 AI key）"
             else:
                 t1 = time.time()
                 answer = self.engineer.ask(question, snap)
                 ai_dt = time.time() - t1
-                usage = self.engineer.client.last_usage or {}
+                usage = self.engineer.last_usage or {}
                 print(f"[voice] AI 推理耗时 {ai_dt:.2f}s "
-                      f"(tokens={usage.get('total_tokens')})", flush=True)
+                      f"(来源={self.engineer.last_source}, "
+                      f"tokens={usage.get('total_tokens')})", flush=True)
             print(f"[voice] AI: {answer}", flush=True)
 
             # TTS
@@ -154,6 +174,17 @@ class VoiceApp:
             self._busy = False
             print("[voice] 就绪，按小键盘0提问", flush=True)
 
+    def _get_stt(self):
+        """Return the shared STT engine, building it once under a lock.
+
+        The preloader and the first question previously both called
+        ``LocalSTT(...)`` and could load two models; the lock serialises them.
+        """
+        with self._stt_lock:
+            if self._stt is None:
+                self._stt = make_stt(input_device=self.input_dev)
+            return self._stt
+
     # ----------------------------------------------------------------- public
 
     def run(self) -> None:
@@ -161,18 +192,20 @@ class VoiceApp:
         t.start()
         print(f"遥测接收已启动 (UDP {self.receiver.port})")
         if self.engineer.configured:
-            print("AI 已就绪 (DeepSeek)")
+            print("AI 已就绪")
         else:
-            print("⚠ 未配置 DeepSeek key，AI 问答不可用")
+            print("⚠ 未配置 AI key，AI 问答不可用")
 
         # Preload the STT model in the background so the first question isn't
         # stuck on a ~20s model load.
         def _preload():
             print("STT 模型加载中…（首次约 20 秒，之后提问即时）", flush=True)
-            from voice_stt import LocalSTT
-            self._stt = LocalSTT(model_size="small", input_device=self.input_dev)
-            self._stt._load()
-            print("STT 就绪。", flush=True)
+            stt = self._get_stt()
+            if stt is not None and hasattr(stt, "_load"):
+                stt._load()
+                print("STT 就绪。", flush=True)
+            else:
+                print("⚠ STT 不可用。", flush=True)
         threading.Thread(target=_preload, daemon=True).start()
 
         self.trigger = RawKeyTrigger(on_tap=self._on_tap, vk=TRIGGER_VK)
@@ -184,10 +217,20 @@ def main() -> None:
     p = argparse.ArgumentParser(description="F1 voice race engineer")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--bind-ip", default="127.0.0.1")
-    p.add_argument("--input", default="G733", help="麦克风设备名片段")
-    p.add_argument("--output", default="G733", help="输出设备名片段")
+    p.add_argument("--input", default="", help="麦克风设备名片段（默认取 .env AUDIO_INPUT）")
+    p.add_argument("--output", default="", help="输出设备名片段（默认取 .env AUDIO_OUTPUT）")
+    p.add_argument("--list-audio", action="store_true",
+                   help="列出可用音频设备后退出")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
+
+    if args.list_audio:
+        for kind, label in (("input", "输入(麦克风)"), ("output", "输出(播放)")):
+            print(f"\n{label}:")
+            for d in audio.list_devices(kind):
+                mark = " (默认)" if d["default"] else ""
+                print(f"  [{d['id']}] {d['name']} ({d['channels']}ch){mark}")
+        return
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

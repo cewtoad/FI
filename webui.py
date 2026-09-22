@@ -18,7 +18,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 
+import audio
+from app import build_app
+from config import get_config
 from engineer import Engineer
+from llm_client import LLMError, make_llm
+from profiles import PROFILES
 from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from recorder import SessionRecorder
 from state import TelemetryState
@@ -27,6 +32,11 @@ from voice import VoiceLink
 
 # Hard cap for a voice question upload (~1 minute of opus audio, generous).
 MAX_VOICE_BYTES = 5 * 1024 * 1024
+# Caps for the text Q&A endpoint (T11 hardening).
+MAX_QUESTION_CHARS = 500
+MAX_BODY_BYTES = 64 * 1024
+# Only one LLM request in flight at a time; extra callers get 429.
+_ASK_SEMAPHORE = threading.Semaphore(1)
 
 PAGE = r"""<!doctype html>
 <html lang="zh">
@@ -276,16 +286,34 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(self, code: int, obj: Any) -> None:
+        self._send(code, json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"),
+                   "application/json; charset=utf-8")
+
+    def _host_ok(self) -> bool:
+        """Reject non-local Host headers to blunt DNS-rebinding reads of
+        /api/state. Only enforced while bound to loopback."""
+        bind = getattr(self.server, "bind_ip", "127.0.0.1")
+        if bind not in ("127.0.0.1", "localhost"):
+            return True
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        return host in ("127.0.0.1", "localhost", "[::1]", "::1", "")
+
     def do_GET(self):
+        if not self._host_ok():
+            self._send(403, b"forbidden host", "text/plain")
+            return
         if self.path == "/" or self.path.startswith("/index"):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path == "/api/state":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             snap = ctx["state"].snapshot()
-            # Continuously persist completed laps so nothing is lost if the
-            # window is closed without exporting.
+            # Laps are now persisted by the receiver hook; keep this as a
+            # low-rate backup for the leaderboard/vehicle-status fields.
             try:
-                ctx["recorder"].record_state(snap)
+                rec = ctx.get("recorder")
+                if rec is not None:
+                    rec.record_state(snap)
             except Exception:
                 pass
             payload = {
@@ -299,6 +327,28 @@ class _Handler(BaseHTTPRequestHandler):
             }
             self._send(200, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
+        elif self.path == "/api/llm":
+            ctx = self.server.ctx  # type: ignore[attr-defined]
+            self._send_json(200, {"engineer": ctx["engineer"].describe()})
+        elif self.path == "/api/models":
+            ctx = self.server.ctx  # type: ignore[attr-defined]
+            try:
+                self._send_json(200, {"models": ctx["engineer"].client.model_list()})
+            except LLMError as e:
+                self._send_json(502, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                self._send_json(500, {"error": str(e)})
+        elif self.path == "/api/audio":
+            self._send_json(200, {
+                "current": audio.current(),
+                "input": audio.list_devices("input"),
+                "output": audio.list_devices("output"),
+            })
+        elif self.path == "/api/profile":
+            self._send_json(200, {
+                "current": get_config().get("PROFILE", "") or "standard",
+                "profiles": sorted(PROFILES),
+            })
         elif self.path == "/api/export":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             rec = ctx["recorder"]
@@ -328,31 +378,104 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if not self._host_ok():
+            self._send(403, b"forbidden host", "text/plain")
+            return
         if self.path == "/api/ask_voice":
             self._ask_voice()
+            return
+        if self.path == "/api/llm":
+            self._set_llm()
+            return
+        if self.path == "/api/audio":
+            self._set_audio()
+            return
+        if self.path == "/api/profile":
+            self._set_profile()
             return
         if self.path != "/api/ask":
             self._send(404, b"not found", "text/plain")
             return
-        length = int(self.headers.get("Content-Length", "0"))
+        self._ask()
+
+    def _read_json(self) -> Optional[Dict[str, Any]]:
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
-            question = str(body.get("question", "")).strip()
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._send_json(413 if length > MAX_BODY_BYTES else 400,
+                            {"error": "bad body size"})
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
         except Exception:
-            self._send(400, json.dumps({"error": "bad json"}).encode(), "application/json")
+            self._send_json(400, {"error": "bad json"})
+            return None
+
+    def _ask(self) -> None:
+        body = self._read_json()
+        if body is None:
             return
-        ctx = self.server.ctx  # type: ignore[attr-defined]
-        eng: Engineer = ctx["engineer"]
-        snap = ctx["state"].snapshot()
-        answer = eng.ask(question, snap)
-        usage = eng.client.last_usage
+        question = str(body.get("question", "")).strip()
+        if not question:
+            self._send_json(400, {"error": "empty question"})
+            return
+        if len(question) > MAX_QUESTION_CHARS:
+            self._send_json(413, {"error": f"question too long (>{MAX_QUESTION_CHARS})"})
+            return
+        if not _ASK_SEMAPHORE.acquire(blocking=False):
+            self._send_json(429, {"error": "busy, one question at a time"})
+            return
         try:
-            ctx["recorder"].record_qa(question, answer, usage)
-        except Exception:
-            pass
-        self._send(200, json.dumps({"answer": answer, "error": eng.last_error, "usage": usage},
-                                   ensure_ascii=False, default=str).encode("utf-8"),
-                   "application/json; charset=utf-8")
+            ctx = self.server.ctx  # type: ignore[attr-defined]
+            eng: Engineer = ctx["engineer"]
+            snap = ctx["state"].snapshot()
+            answer = eng.ask(question, snap)
+            usage = eng.last_usage
+            try:
+                ctx["recorder"].record_qa(question, answer, usage)
+            except Exception:
+                pass
+            self._send_json(200, {"answer": answer, "error": eng.last_error,
+                                  "usage": usage, "source": eng.last_source})
+        finally:
+            _ASK_SEMAPHORE.release()
+
+    def _set_llm(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        cfg = get_config()
+        for key in ("base_url", "api_key", "model"):
+            if body.get(key):
+                env_key = {"base_url": "LLM_BASE_URL", "api_key": "LLM_API_KEY",
+                           "model": "LLM_MODEL"}[key]
+                cfg.set_runtime(env_key, str(body[key]).strip())
+        ctx = self.server.ctx  # type: ignore[attr-defined]
+        ctx["engineer"].refresh_client()
+        self._send_json(200, {"engineer": ctx["engineer"].describe()})
+
+    def _set_audio(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        for kind, key in (("input", "input"), ("output", "output")):
+            if body.get(key):
+                audio.set_device(kind, str(body[key]).strip())
+        self._send_json(200, {"current": audio.current()})
+
+    def _set_profile(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        name = str(body.get("profile", "")).strip().lower()
+        if name not in PROFILES:
+            self._send_json(400, {"error": f"unknown profile: {name}",
+                                  "profiles": sorted(PROFILES)})
+            return
+        get_config().set_runtime("PROFILE", name)
+        self._send_json(200, {"current": name})
 
     def _ask_voice(self) -> None:
         """POST /api/ask_voice - raw audio body -> {question, answer, audio}."""
@@ -386,9 +509,11 @@ class _Handler(BaseHTTPRequestHandler):
         # Persist the Q&A turn exactly like /api/ask does.
         if result.get("question") is not None and result.get("answer") is not None:
             try:
-                eng = ctx.get("engineer")
-                usage = getattr(getattr(eng, "client", None), "last_usage", None)
-                ctx["recorder"].record_qa(result["question"], result["answer"], usage)
+                rec = ctx.get("recorder")
+                if rec is not None:
+                    eng = ctx.get("engineer")
+                    usage = getattr(eng, "last_usage", None)
+                    rec.record_qa(result["question"], result["answer"], usage)
             except Exception:
                 pass
         self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"),
@@ -404,31 +529,27 @@ def _receiver_thread(state: TelemetryState, receiver: TelemetryReceiver, logger)
         logger.error("receiver stopped: %r", e)
 
 
-def serve(port: int = 20777, web_port: int = 8765, logger: Optional[logging.Logger] = None) -> None:
+def serve(port: int = 20777, web_port: int = 8765,
+          bind_ip: str = "127.0.0.1",
+          logger: Optional[logging.Logger] = None) -> None:
     logger = logger or logging.getLogger("f1_tr.web")
-    state = TelemetryState(error_logger=logger)
-    # Only the packet types TelemetryState consumes; the rest cost a header
-    # parse and are dropped (see receiver.PACKETS_CONSUMED).
-    receiver = TelemetryReceiver(state, port=port, bind_ip="127.0.0.1",
-                                 interested=PACKETS_CONSUMED, logger=logger)
-    engineer = Engineer()
-    voice = VoiceLink(engineer, state)
+    app = build_app(port=port, bind_ip="127.0.0.1", logger=logger)
+    voice = VoiceLink(app.engineer, app.state)
+    app.extras["voice"] = voice
 
-    t = threading.Thread(target=_receiver_thread, args=(state, receiver, logger), daemon=True)
+    t = threading.Thread(target=_receiver_thread,
+                         args=(app.state, app.receiver, logger), daemon=True)
     t.start()
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", web_port), _Handler)
-    httpd.ctx = {  # type: ignore[attr-defined]
-        "state": state,
-        "receiver": receiver,
-        "summariser": Summariser(),
-        "engineer": engineer,
-        "recorder": SessionRecorder(),
-        "voice": voice,
-    }
-    logger.info("web UI on http://127.0.0.1:%s  (UDP %s)", web_port, port)
-    print(f"\n>>> Open http://127.0.0.1:{web_port}  (UDP listening on {port})", flush=True)
-    print(f">>> Session recording to {httpd.ctx['recorder'].path}", flush=True)
+    httpd = ThreadingHTTPServer((bind_ip, web_port), _Handler)
+    httpd.ctx = app.ctx()  # type: ignore[attr-defined]
+    httpd.bind_ip = bind_ip  # type: ignore[attr-defined]
+    shown = "127.0.0.1" if bind_ip in ("0.0.0.0", "::") else bind_ip
+    logger.info("web UI on http://%s:%s  (UDP %s)", bind_ip, web_port, port)
+    print(f"\n>>> Open http://{shown}:{web_port}  (UDP listening on {port}, bind={bind_ip})",
+          flush=True)
+    if app.recorder is not None:
+        print(f">>> Session recording to {app.recorder.path}", flush=True)
     if voice.available:
         tts_name = voice.tts.name if voice.tts_available else "off"
         print(f">>> Voice link: on (stt={voice.stt.name}, tts={tts_name})", flush=True)

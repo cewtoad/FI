@@ -92,7 +92,16 @@ def main() -> None:
     if args.web:
         from webui import serve
         logger = _setup_logging(args.verbose)
-        serve(port=args.port, web_port=args.web_port, logger=logger)
+        # --mode / --interval / --json are console-panel options; warn instead
+        # of silently ignoring them in web mode.
+        if args.mode != "timetrial":
+            print("warn: --mode has no effect in --web mode", file=sys.stderr)
+        if args.interval != 1.0:
+            print("warn: --interval has no effect in --web mode", file=sys.stderr)
+        if args.json:
+            print("warn: --json has no effect in --web mode", file=sys.stderr)
+        serve(port=args.port, web_port=args.web_port, bind_ip=args.bind_ip,
+              logger=logger)
         return
     try:
         asyncio.run(_main(args))

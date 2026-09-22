@@ -38,6 +38,19 @@ def _fmt_gap(ms: Optional[int]) -> str:
     return f"+{ms/1000:.3f}s"
 
 
+def _fmt_gap_signed(ms: Optional[int]) -> str:
+    """Gap in ms rendered with an explicit direction, e.g. ``落后 19.982s``.
+
+    F1 UDP ``deltaToRaceLeader``/``deltaToCarInFront`` are non-negative for
+    cars behind the reference, so a positive value always means "behind".
+    Spelling the direction out prevents the LLM from reading ``gap_to_leader``
+    as "how far I lead".
+    """
+    if not ms or ms <= 0:
+        return "0.000s"
+    return f"落后 {ms/1000:.3f}s"
+
+
 class Summariser:
     """Derives facts and notes from a snapshot dict."""
 
@@ -67,8 +80,8 @@ class Summariser:
             "sector1": _fmt_ms(lap.get("sector1_ms")),
             "sector2": _fmt_ms(lap.get("sector2_ms")),
             "sector3": _fmt_ms(lap.get("sector3_ms")),
-            "gap_to_front": "领跑" if pos == 1 else _fmt_ms(lap.get("delta_to_car_in_front_ms")),
-            "gap_to_leader": "领跑" if pos == 1 else _fmt_ms(lap.get("delta_to_race_leader_ms")),
+            "gap_to_front": "领跑" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_car_in_front_ms")),
+            "gap_to_leader": "领先全场" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_race_leader_ms")),
             "speed_kph": car.get("speed_kph"),
             "gear": car.get("gear"),
             "tyre_compound": status.get("tyre_compound_actual"),

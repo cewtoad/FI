@@ -20,7 +20,7 @@ import urllib.request
 import uuid
 from typing import Dict, List, Optional, Tuple
 
-from ai_client import load_dotenv
+from config import get_config
 
 _MIME_SUFFIX = {
     "audio/webm": ".webm",
@@ -74,12 +74,12 @@ class CloudSTT(STTEngine):
     name = "cloud"
 
     def __init__(self) -> None:
-        cfg = {**load_dotenv(), **os.environ}
-        self.api_key = cfg.get("STT_API_KEY", "").strip()
-        self.base_url = cfg.get("STT_BASE_URL", "").strip().rstrip("/")
+        cfg = get_config()
+        self.api_key = cfg.get("STT_API_KEY").strip()
+        self.base_url = cfg.get("STT_BASE_URL").strip().rstrip("/")
         self.model = cfg.get("STT_MODEL", "whisper-1").strip()
         self.language = cfg.get("STT_LANGUAGE", "zh").strip()
-        self.timeout = float(cfg.get("STT_TIMEOUT", "30"))
+        self.timeout = cfg.get_float("STT_TIMEOUT", 30.0)
 
     @property
     def available(self) -> bool:
@@ -121,11 +121,12 @@ class LocalWhisperSTT(STTEngine):
 
     name = "local"
 
-    def __init__(self) -> None:
-        cfg = {**load_dotenv(), **os.environ}
-        self.model_size = cfg.get("STT_LOCAL_MODEL", "small").strip()
+    def __init__(self, input_device: Optional[str] = None,
+                 model_size: Optional[str] = None) -> None:
+        cfg = get_config()
+        self.model_size = (model_size or cfg.get("STT_LOCAL_MODEL", "small")).strip()
         self.language = cfg.get("STT_LANGUAGE", "zh").strip()
-        self.cpu_threads = int(cfg.get("STT_LOCAL_THREADS", "2"))
+        self.cpu_threads = cfg.get_int("STT_LOCAL_THREADS", 2)
         self._whisper = None
         self._model = None
         try:
@@ -158,14 +159,17 @@ class LocalWhisperSTT(STTEngine):
             os.unlink(path)
 
 
-def make_stt() -> Optional[STTEngine]:
-    """Pick the STT provider from config (explicit wins, else auto-detect)."""
-    cfg = {**load_dotenv(), **os.environ}
+def make_stt(**kwargs) -> Optional[STTEngine]:
+    """Pick the STT provider from config (explicit wins, else auto-detect).
+
+    Extra kwargs (e.g. ``input_device``) are forwarded to the local provider.
+    """
+    cfg = get_config()
     provider = cfg.get("STT_PROVIDER", "").strip().lower()
     if provider == "off":
         return None
     if provider == "local":
-        eng: STTEngine = LocalWhisperSTT()
+        eng: STTEngine = LocalWhisperSTT(**kwargs)
         return eng if eng.available else None
     if provider == "cloud":
         eng = CloudSTT()
@@ -174,5 +178,5 @@ def make_stt() -> Optional[STTEngine]:
     cloud = CloudSTT()
     if cloud.available:
         return cloud
-    local = LocalWhisperSTT()
+    local = LocalWhisperSTT(**kwargs)
     return local if local.available else None
