@@ -20,7 +20,9 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-_ENV_PATH = Path(__file__).parent / ".env"
+from paths import app_root
+
+_ENV_PATH = app_root() / ".env"
 
 
 def parse_env_file(path: Optional[Path] = None) -> Dict[str, str]:

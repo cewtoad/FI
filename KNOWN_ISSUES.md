@@ -72,7 +72,46 @@
 - `lib/f1_types/header.py` 补 `__hash__`（与 `__eq__` 一致）。
 - README 16→17 种 packet。
 
+## 本轮新增（分发 / 打包）
+
+### ✅ 无 API key 兜底
+- `engineer.py`：未命中快答且未配置 key 时，返回**可操作提示**
+  （告知去设置页填 key + 列出无需 key 即可问的本地问题），不再是死路。
+- 快答路由始终在 key 检查之前，无 key 也能答：名次/圈速/油量/胎温/轮胎/损伤/前车差距/进站。
+
+### ✅ 网页 onboarding
+- 无 key 时页面顶部显示设置面板：填 Base URL / 模型 / key →
+  保存 → 自动 `GET /api/models` 测连通 → 内嵌游戏 UDP 设置图文。
+
+### ✅ 冻结路径（打包前置）
+- 新增 `paths.py` 的 `app_root()`：frozen 时指向 exe 旁，否则源码目录；
+  支持 `F1TR_ROOT` 环境变量覆盖。
+- `config.py`/`recorder.py`/`audio.py`/`voice_stt.py`/`voice_tts.py`/`download_stt_model.py`
+  全部改用它，`.env` / `sessions/` / `stt_*` 在打包后落在解压目录（绿色软件语义）。
+
+### ✅ 上轮遗留 4 小问题
+- UDP `--udp-bind` 与网页面板 bind 分离（`webui.py:536` 硬编码已修）；
+  主机广播到 PC 的场景现在可用。
+- `/api/llm`、`/api/audio` 写接口**仅允许 127.0.0.1 来源**（防局域网改 key）。
+- `app._on_packet` 降频（LAP_DATA 立即，其余最多 2Hz）。
+- `test_stt_mic.py` 改名 `tool_stt_mic.py`（不再被 pytest 收集，CI 不会崩）；
+  pytest 的 `norecursedirs` 加入 `build_lib/dist/build`。
+
+### ✅ 打包与分发
+- `FI.py`：启动二选一（网页 / 语音），网页模式自动开浏览器；含端口占用预检。
+- `build_release.ps1`：一键产出两个包
+  - `F1Engineer-core-<v>-win64.zip`：PyInstaller **onedir + --noupx**（实测 20.9MB）
+  - `F1Engineer-full-<v>-win64.zip`：源码 + stt_lib + stt_models + embedded Python + 启动.bat
+- `version_info.txt`：exe 版本元数据（CompanyName/ProductName），降低 AV 误报。
+- `.github/workflows/release.yml`：**push tag `v*`** 才构建 → pytest → core zip + SHA256 → Release。
+- `RELEASE_SIGNING.md`：SignPath OSS 免费签名申请指引。
+
+### ✅ 体验
+- 端口占用友好提示（20777 被 SimHub 等占用时给说明）。
+- 版本更新检查横幅（`/api/version`，6 小时缓存，只提示不自动下载）。
+
 ## 待办（用户明确想做）
 
-- 打包 EXE / 依赖整合
+- 申请 SignPath 签名（见 RELEASE_SIGNING.md，需等审批）
+- 全量包内置 embedded Python（需下载 python-3.12.x-embed-amd64.zip 到 python-embed/）
 - 整理上传

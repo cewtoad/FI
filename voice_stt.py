@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 import audio
+from paths import app_root
 
-HERE = Path(__file__).parent
+HERE = app_root()
 _SYS_PATH_ADDED = False
 
 

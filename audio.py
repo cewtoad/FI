@@ -20,8 +20,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import get_config
+from paths import app_root
 
-_HERE = Path(__file__).parent
+_HERE = app_root()
 if str(_HERE / "stt_lib") not in sys.path:
     sys.path.insert(0, str(_HERE / "stt_lib"))
 

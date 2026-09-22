@@ -1,0 +1,102 @@
+name: release
+
+# Only build a release when a version tag is pushed (e.g. v0.2.0).
+# Day-to-day pushes to main do NOT build - that keeps CI quota for tags only.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}   # allow a manual run from the Actions tab
+
+permissions:
+  contents: write         # needed to create the GitHub Release
+
+jobs:
+  # ---------------------------------------------------------------- tests
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev deps
+        run: pip install pytest
+      - name: Run tests
+        run: pytest -q
+
+  # ------------------------------------------------------------- core exe
+  core:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+      - name: Build core (onedir)
+        run: >
+          pyinstaller --noconfirm --clean --onedir --noupx
+          --name F1Engineer --version-file version_info.txt --paths .
+          --exclude-module tkinter --exclude-module matplotlib
+          --exclude-module faster_whisper --exclude-module ctranslate2
+          --exclude-module sounddevice --exclude-module numpy
+          FI.py
+      - name: Collect default config
+        run: Copy-Item .env.example dist/F1Engineer/.env.example
+      - name: Zip core
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          Compress-Archive -Path dist/F1Engineer `
+            -DestinationPath "dist/F1Engineer-core-$v-win64.zip"
+      - name: Upload core artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-zip
+          path: dist/F1Engineer-core-*-win64.zip
+
+  # ------------------------------------------------- release + checksums
+  release:
+    needs: [core]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten artifacts
+        run: |
+          find dist -name "*.zip" -exec mv {} dist/ \;
+      - name: Compute SHA256
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          body: |
+            ## F1 Race Engineer ${{ github.ref_name }}
+
+            ### 下载哪个？
+            - **F1Engineer-core-*.zip**（约 25MB）：解压双击 `F1Engineer.exe`。
+              语音走云端 STT + Windows SAPI，填个 API key 即可，无需额外依赖。
+            - **F1Engineer-full-*.zip**（约 760MB，见下）：内置本地语音识别，
+              完全离线，解压即用。
+
+            ### 校验
+            下载后请核对 `SHA256SUMS.txt` 中的哈希值。
+
+            ### 安全说明
+            本项目只被动接收游戏官方 UDP 遥测，按键检测用 Raw Input（只订阅），
+            不读写游戏内存、不模拟输入、不绕过反作弊。详见 README。
+
+# NOTE: the full pack is NOT built in CI - it bundles the local whisper model
+# (~460MB) and ctranslate2 deps (~264MB), too large for GitHub-hosted runners
+# and artifacts. Build it locally with:
+#     powershell -File build_release.ps1 -Version <v> -FullOnly

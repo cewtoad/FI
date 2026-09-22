@@ -26,6 +26,9 @@ __pycache__/
 .Python
 build/
 dist/
+build_lib/
+python-embed/
+*.spec
 *.egg-info/
 .eggs/
 pip-wheel-metadata/

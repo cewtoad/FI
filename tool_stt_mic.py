@@ -16,7 +16,9 @@ import time
 import wave
 from pathlib import Path
 
-HERE = Path(__file__).parent
+from paths import app_root
+
+HERE = app_root()
 sys.path.insert(0, str(HERE / "stt_lib"))
 os.environ.setdefault("HF_HOME", str(HERE / "stt_models"))
 

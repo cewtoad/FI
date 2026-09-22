@@ -19,7 +19,9 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, Optional
 
-SESSION_DIR = Path(__file__).parent / "sessions"
+from paths import app_root
+
+SESSION_DIR = app_root() / "sessions"
 
 
 class SessionRecorder:

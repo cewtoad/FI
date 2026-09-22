@@ -72,7 +72,11 @@ async def _main(args: argparse.Namespace) -> None:
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="F1 telemetry receiver (TR layer)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help="UDP port to bind")
-    p.add_argument("--bind-ip", default="127.0.0.1", help="IP to bind")
+    p.add_argument("--bind-ip", default="127.0.0.1",
+                   help="IP the web panel binds to (console mode: UDP bind)")
+    p.add_argument("--udp-bind", default=None,
+                   help="IP the UDP receiver binds to (web mode; default 127.0.0.1, "
+                        "use 0.0.0.0 for a console/host broadcasting to this PC)")
     p.add_argument("--mode", choices=["timetrial", "race"], default="timetrial",
                    help="Which packet set to subscribe to")
     p.add_argument("--interval", type=float, default=1.0,
@@ -101,7 +105,7 @@ def main() -> None:
         if args.json:
             print("warn: --json has no effect in --web mode", file=sys.stderr)
         serve(port=args.port, web_port=args.web_port, bind_ip=args.bind_ip,
-              logger=logger)
+              udp_bind=args.udp_bind, logger=logger)
         return
     try:
         asyncio.run(_main(args))

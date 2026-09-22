@@ -16,7 +16,9 @@ import sys
 from pathlib import Path
 
 # Make faster-whisper importable from stt_lib/
-HERE = Path(__file__).parent
+from paths import app_root
+
+HERE = app_root()
 sys.path.insert(0, str(HERE / "stt_lib"))
 
 # Force model downloads into the project folder, not C:.

@@ -38,6 +38,50 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
+APP_VERSION = "0.2.0"
+_RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
+_version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _check_update() -> Dict[str, Any]:
+    """Return {current, latest, update_available}; cached for 6 hours.
+
+    Best-effort only: any network failure returns update_available=False so the
+    panel never blocks or errors on a missing internet connection.
+    """
+    import time
+    import urllib.request
+
+    now = time.time()
+    cached = _version_cache.get("data")
+    if cached is not None and (now - _version_cache.get("at", 0)) < 6 * 3600:
+        return cached
+    result = {"current": APP_VERSION, "latest": None, "update_available": False}
+    try:
+        req = urllib.request.Request(_RELEASES_API,
+                                     headers={"User-Agent": "F1RaceEngineer"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latest = str(data.get("tag_name") or "").lstrip("v")
+        if latest:
+            result["latest"] = latest
+            result["update_available"] = _version_tuple(latest) > _version_tuple(APP_VERSION)
+    except Exception:
+        pass
+    _version_cache["at"] = now
+    _version_cache["data"] = result
+    return result
+
+
+def _version_tuple(v: str):
+    parts = []
+    for p in str(v).split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts)
+
 PAGE = r"""<!doctype html>
 <html lang="zh">
 <head>
@@ -76,13 +120,57 @@ PAGE = r"""<!doctype html>
   .mic.rec { background:#7a2a2a; color:#fff; animation:pulse 1s infinite; }
   @keyframes pulse { 50% { opacity:.55; } }
   .meta { color:var(--dim); font-size:12px; margin-top:8px; }
+  .setup { background:#3a2f16; border:1px solid #7a6320; border-radius:10px; padding:12px 16px; margin-bottom:16px; display:none; }
+  .setup h2 { font-size:14px; margin:0 0 6px; color:#e7d16e; }
+  .setup input, .setup select { background:#0d0f13; border:1px solid var(--line); color:var(--txt); padding:8px; border-radius:6px; width:100%; margin:4px 0; }
+  .setup .row2 { display:flex; gap:8px; }
+  .setup code { background:#0d0f13; padding:1px 5px; border-radius:4px; color:var(--accent); }
+  .ok { color:#6ee787; } .bad { color:#e77; }
+  details.setupbox { margin-top:10px; }
+  details.setupbox summary { cursor:pointer; color:var(--accent); font-size:12px; }
   @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
+<div class="wrap" style="grid-template-columns:1fr;">
+  <div class="setup" id="update" style="background:#16293a;border-color:#2b5a7a;display:none;">
+    <span style="color:#8ecbff;">发现新版本 <b id="newver"></b>（当前 <span id="curver"></span>）</span>
+    <a id="dlLink" href="https://github.com/cewtoad/FI/releases/latest" target="_blank"
+       style="color:var(--accent);margin-left:8px;">前往下载 →</a>
+  </div>
+  <div class="setup" id="setup">
+    <h2>⚙ 首次设置：填入 AI key（不填也能用本地问答）</h2>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">
+      支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。
+      名次、圈速、油量、胎温、损伤等高频问题**无需 key** 即可回答。
+    </div>
+    <div class="row2">
+      <input type="text" id="setBase" placeholder="Base URL（如 https://api.deepseek.com）">
+      <input type="text" id="setModel" placeholder="模型（如 deepseek-flash）">
+    </div>
+    <input type="password" id="setKey" placeholder="API Key（sk-...）">
+    <div class="row2" style="margin-top:6px;">
+      <button id="setSave">保存并测试连接</button>
+      <button id="setClose" style="background:#232a36;color:var(--txt);">稍后</button>
+    </div>
+    <div class="meta" id="setMsg"></div>
+    <details class="setupbox">
+      <summary>游戏内 UDP 遥测怎么设？</summary>
+      <div style="font-size:12px;line-height:1.9;margin-top:6px;">
+        游戏 <b>设置 → UDP 遥测</b>：<br>
+        • UDP 遥测：<code>开启</code><br>
+        • UDP IP：<code>127.0.0.1</code>　• UDP 端口：<code>20777</code><br>
+        • UDP 赛制：<code>2026</code>（或与你游戏版本一致）<br>
+        • <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。
+      </div>
+    </details>
+  </div>
+</div>
 <div class="wrap">
   <div class="panel">
-    <h1>遥测面板 <span id="conn" class="badge wait">等待数据</span></h1>
+    <h1>遥测面板 <span id="conn" class="badge wait">等待数据</span>
+      <a href="#" id="openSet" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;">设置</a>
+    </h1>
     <div id="facts"></div>
     <div class="notes" id="notes"></div>
     <div class="meta" id="meta"></div>
@@ -160,6 +248,42 @@ function addMsg(who, text){
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
 }
+let llmKnown = null;
+async function refreshSetup(){
+  try {
+    const r = await fetch("/api/llm");
+    const d = await r.json();
+    const eng = d.engineer || {};
+    const noKey = !eng.base_url || !eng.model;
+    document.getElementById("setup").style.display = llmKnown && !noKey ? "none" : "block";
+    if (document.getElementById("setup").style.display === "block" && noKey){
+      if (!document.getElementById("setBase").value) document.getElementById("setBase").value = eng.base_url || "https://api.deepseek.com";
+      if (!document.getElementById("setModel").value) document.getElementById("setModel").value = eng.model || "deepseek-flash";
+    }
+    llmKnown = true;
+  } catch(e){}
+}
+async function saveSetup(){
+  const base = document.getElementById("setBase").value.trim();
+  const model = document.getElementById("setModel").value.trim();
+  const key = document.getElementById("setKey").value.trim();
+  const msg = document.getElementById("setMsg");
+  msg.className = "meta"; msg.textContent = "保存中…";
+  try {
+    const body = {};
+    if (base) body.base_url = base;
+    if (model) body.model = model;
+    if (key) body.api_key = key;
+    await fetch("/api/llm", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    msg.textContent = "已保存，测试连接中…";
+    const r = await fetch("/api/models");
+    if (r.ok){ msg.className = "meta ok"; msg.textContent = "✓ 连接成功，AI 已就绪"; document.getElementById("setKey").value = ""; refreshSetup(); }
+    else { const e = await r.json(); msg.className = "meta bad"; msg.textContent = "连接失败：" + (e.error||r.status) + "（本地问答仍可用）"; }
+  } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
+}
+document.getElementById("setSave").onclick = saveSetup;
+document.getElementById("setClose").onclick = () => { document.getElementById("setup").style.display = "none"; };
+document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); document.getElementById("setup").style.display = "block"; window.scrollTo(0,0); };
 async function poll(){
   try {
     const r = await fetch("/api/state");
@@ -266,7 +390,20 @@ window.addEventListener("pointerup", () => { if (recorder) stopRec(false); });
 window.addEventListener("keydown", e => { if (e.key === "Escape" && recorder) stopRec(true); });
 window.addEventListener("blur", () => { if (recorder) stopRec(true); });
 
+async function checkUpdate(){
+  try {
+    const r = await fetch("/api/version");
+    const d = await r.json();
+    if (d.update_available){
+      document.getElementById("newver").textContent = d.latest;
+      document.getElementById("curver").textContent = d.current;
+      document.getElementById("update").style.display = "block";
+    }
+  } catch(e){}
+}
 setInterval(poll, 1000); poll();
+setInterval(refreshSetup, 5000); refreshSetup();
+checkUpdate();
 </script>
 </body>
 </html>
@@ -289,6 +426,16 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_json(self, code: int, obj: Any) -> None:
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"),
                    "application/json; charset=utf-8")
+
+    def _local_only(self) -> bool:
+        """True when the request originates from the local machine.
+
+        Config-writing endpoints (/api/llm, /api/audio) must never be reachable
+        from the LAN, even if the panel is bound to 0.0.0.0 - otherwise anyone
+        on the network could overwrite the API key and persist it to .env.
+        """
+        addr = self.client_address[0] if self.client_address else ""
+        return addr in ("127.0.0.1", "::1", "localhost")
 
     def _host_ok(self) -> bool:
         """Reject non-local Host headers to blunt DNS-rebinding reads of
@@ -327,6 +474,8 @@ class _Handler(BaseHTTPRequestHandler):
             }
             self._send(200, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
+        elif self.path == "/api/version":
+            self._send_json(200, _check_update())
         elif self.path == "/api/llm":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             self._send_json(200, {"engineer": ctx["engineer"].describe()})
@@ -383,6 +532,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/ask_voice":
             self._ask_voice()
+            return
+        if self.path in ("/api/llm", "/api/audio") and not self._local_only():
+            self._send_json(403, {"error": "config changes are local-only"})
             return
         if self.path == "/api/llm":
             self._set_llm()
@@ -531,9 +683,13 @@ def _receiver_thread(state: TelemetryState, receiver: TelemetryReceiver, logger)
 
 def serve(port: int = 20777, web_port: int = 8765,
           bind_ip: str = "127.0.0.1",
+          udp_bind: Optional[str] = None,
           logger: Optional[logging.Logger] = None) -> None:
     logger = logger or logging.getLogger("f1_tr.web")
-    app = build_app(port=port, bind_ip="127.0.0.1", logger=logger)
+    # UDP bind is separate from the web-panel bind: a console/host player may
+    # broadcast to the PC (needs 0.0.0.0) while the panel stays loopback.
+    udp_bind = udp_bind or "127.0.0.1"
+    app = build_app(port=port, bind_ip=udp_bind, logger=logger)
     voice = VoiceLink(app.engineer, app.state)
     app.extras["voice"] = voice
 
@@ -546,8 +702,8 @@ def serve(port: int = 20777, web_port: int = 8765,
     httpd.bind_ip = bind_ip  # type: ignore[attr-defined]
     shown = "127.0.0.1" if bind_ip in ("0.0.0.0", "::") else bind_ip
     logger.info("web UI on http://%s:%s  (UDP %s)", bind_ip, web_port, port)
-    print(f"\n>>> Open http://{shown}:{web_port}  (UDP listening on {port}, bind={bind_ip})",
-          flush=True)
+    print(f"\n>>> Open http://{shown}:{web_port}  "
+          f"(UDP {udp_bind}:{port}, panel bind={bind_ip})", flush=True)
     if app.recorder is not None:
         print(f">>> Session recording to {app.recorder.path}", flush=True)
     if voice.available:

@@ -27,7 +27,35 @@
 
 ---
 
-## 快速开始
+## 下载与安装
+
+发布页提供两个包，按需选一个（**推荐先试轻量核心包**）：
+
+| | **轻量核心包** `core` | **全量语音包** `full` |
+|---|---|---|
+| 体积 | 约 25 MB | 约 760 MB |
+| 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `启动.bat` |
+| Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
+| 语音识别 | 云端 STT（填 key）+ SAPI 播报 | **本地 whisper，完全离线** |
+| 适合 | 大多数人、首次尝试 | 想离线 / 隐私 / 不想买 STT 额度 |
+
+两个包功能相同，只是语音识别后端不同。AI 未配置 key 时，**名次、圈速、油量、
+胎温、损伤、前车差距等高频问题仍可回答**（本地规则，不经过 AI）。
+
+> 下载后请核对发布页 `SHA256SUMS.txt` 中的校验值。
+
+### 从源码运行（开发者）
+
+- **Windows** + **Python 3.12 / 3.13**
+
+```
+py -3.12 -m pip install -e .
+py -3.12 run.py --web
+```
+
+---
+
+## 快速开始（源码）
 
 ### 1. 环境
 
@@ -216,7 +244,9 @@ flowchart TD
 
 ```
 F1_TR/
-├── run.py              主入口（--web 网页 / 终端面板）
+├── FI.py               一键启动（打包入口）：启动二选一（网页 / 语音）
+├── run.py              命令行入口（--web 网页 / 终端面板）
+├── paths.py            路径锚点 app_root()（源码 / PyInstaller / 绿色包通用）
 ├── app.py              组合根：统一装配 state/receiver/engineer/recorder
 ├── voice_main.py       语音入口（遥测 + 语音问答，单进程）
 ├── receiver.py         单进程 UDP 收包 + 解析调度
@@ -237,7 +267,10 @@ F1_TR/
 ├── voice_stt.py        本地 faster-whisper 语音识别
 ├── voice_tts.py        Windows SAPI 语音合成 + 播放
 ├── download_stt_model.py  下载语音模型到项目内
-├── 启动.bat            一键启动（网页模式）
+├── build_release.ps1   构建两个发布包（轻量 exe + 全量语音包）
+├── version_info.txt    exe 版本元数据
+├── RELEASE_SIGNING.md  代码签名申请指引
+├── 启动.bat            一键启动（网页模式，自动选 embedded Python）
 ├── lib/                核心库
 │   ├── f1_types/           16 种 F1 packet 解析（2023–2026）
 │   ├── socket_receiver/    UDP 传输
@@ -246,6 +279,40 @@ F1_TR/
 │   └── fuel_rate_recommender.py / rolling_history.py
 └── sessions/           自动生成的会话记录（运行时产生）
 ```
+
+---
+
+## 兼容性
+
+| 维度 | 支持范围 | 备注 |
+|---|---|---|
+| 操作系统 | Windows 10 1809+ / 11 x64 | Raw Input / SAPI / http.server 均原生 |
+| 游戏 | F1 23 / 24 / 25 / 26（packet 2023–2026） | 未知新格式会被丢弃并计数，不会崩溃 |
+| CPU（本地语音） | 需 AVX 指令集 | 老 CPU 请用云端 STT（`STT_PROVIDER=cloud`）|
+| 语音零依赖路径 | 云端 STT + SAPI 播报 | 纯标准库，轻量核心包即可用 |
+| AI | 任意 OpenAI 兼容端点 | DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama |
+| 端口 | UDP `20777` | 与 SimHub / CrewChief **互斥**（单消费者），同时用需转发 |
+| 网络防火墙 | 绑定 `127.0.0.1` 不触发弹窗 | `--bind-ip 0.0.0.0` 会弹，属正常 |
+
+---
+
+## 会不会封号？（FAQ）
+
+**结论：本项目当前形态在 EA AntiCheat 下的风险接近于零。**
+
+- **只被动接收官方 UDP 广播**。UDP 遥测是游戏设置里的官方功能，SimHub / CrewChief
+  等工具以此生态存在多年；收包不与游戏进程发生任何交互。
+- **按键检测用 Windows Raw Input**（`RIDEV_INPUTSINK`），是**只读**的标准 API ——
+  不注入、不挂钩（不 `SetWindowsHookEx`）、不装驱动、不映射输入。
+- **外置窗口**，不做游戏内注入式 overlay（DX hook / ReShade 类）。
+- **绝不**读写游戏内存、不模拟输入、不绕过反作弊。
+
+反作弊的封禁画像（DLL 注入、读内存、合成输入、内核驱动）与本项目无关；普通的
+置顶窗口（Discord / Steam / OBS 类）也不属于该画像。
+
+> ⚠️ 两点提醒：
+> 1. 反作弊不管你，**不等于**赛事规则允许。**线上排位 / 联赛请自行确认赛事规则**。
+> 2. 打包版本采用 onedir + 版本元数据（非 onefile 自解压），尽量避免被杀软误伤。
 
 ---
 

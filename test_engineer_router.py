@@ -80,6 +80,28 @@ def test_fast_profile_trims_max_tokens():
     assert "快速档" in client.calls[0]["messages"][0]["content"]
 
 
+def test_no_key_gives_actionable_hint_not_dead_end():
+    class Unconfigured:
+        configured = False
+        last_usage = None
+
+        def chat(self, *a, **k):
+            raise AssertionError("must not call LLM without a key")
+
+        def describe(self):
+            return {}
+
+    eng = Engineer(client=Unconfigured(), config=FakeConfig({}))
+    # A question the local router cannot answer -> actionable hint.
+    answer = eng.ask("帮我规划进站策略", SNAP)
+    assert "设置" in answer and "LLM_API_KEY" in answer
+    assert eng.last_source == "no-key"
+    # A question the local router CAN answer still works without a key.
+    local = eng.ask("我现在P几", SNAP)
+    assert "P3" in local
+    assert eng.last_source == "local"
+
+
 def test_cancel_clears_between_asks():
     client = FakeClient()
     eng = Engineer(client=client, config=FakeConfig({}))

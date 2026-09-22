@@ -7,37 +7,40 @@ echo ============================================
 echo   F1 Race Engineer
 echo ============================================
 echo.
-echo   Starting telemetry receiver + web UI...
-echo   Browser will open automatically.
-echo.
-echo   Keep this window open while racing.
-echo   Close this window (or press Ctrl+C) to stop.
-echo.
 
-rem Pick a Python: prefer the py launcher, fall back to python.
-where py >nul 2>nul
-if %errorlevel%==0 (
-    set PY=py -3.12
-) else (
-    set PY=python
+rem --- Pick a Python: embedded runtime first, then py launcher, then python ---
+set "PY="
+if exist "%~dp0python.exe" set "PY=%~dp0python.exe"
+if not defined PY (
+    where py >nul 2>nul && set "PY=py -3.12"
+)
+if not defined PY (
+    where python >nul 2>nul && set "PY=python"
+)
+if not defined PY (
+    echo [!] 没找到 Python。
+    echo     请使用"全量语音包"（内含 Python 运行时），或自行安装 Python 3.12。
+    pause
+    exit /b 1
 )
 
-rem Start the web server in a new window so this one can wait then open the browser.
-start "F1TR-server" cmd /c "%PY% run.py --web"
+echo   启动中：浏览器面板将自动打开。
+echo   保持本窗口开着；关掉窗口即停止。
+echo.
 
-rem Wait for the server to bind before opening the browser.
+rem Start the launcher in a child window, then open the browser.
+start "F1TR-server" cmd /c "%PY%" FI.py --web --no-browser
 timeout /t 3 /nobreak >nul
 start "" "http://127.0.0.1:8765"
 
 echo.
-echo   Web UI: http://127.0.0.1:8765
-echo   If the page does not load, wait a moment and refresh.
+echo   网页面板: http://127.0.0.1:8765
+echo   若页面未加载，稍等几秒后刷新。
 echo.
-echo   Press any key to stop the server and exit.
+echo   按任意键停止并退出。
 pause >nul
 
-rem Kill the server window and its process tree only (by window title).
 taskkill /FI "WINDOWTITLE eq F1TR-server*" /T /F >nul 2>nul
-echo Stopped.
+echo 已停止。
 timeout /t 2 /nobreak >nul
 exit /b 0

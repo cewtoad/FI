@@ -14,10 +14,12 @@ session goes live, so recording no longer depends on a browser polling
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from engineer import Engineer
+from lib.f1_types import F1PacketType
 from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from recorder import SessionRecorder
 from state import TelemetryState
@@ -52,9 +54,20 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
     state = TelemetryState(error_logger=logger)
     recorder = SessionRecorder() if recording else None
 
-    def _on_packet(_packet: Any) -> None:
+    # Keep the receive hot path cheap: persist laps at most RECORD_HZ times a
+    # second, plus immediately whenever a new lap completes (LAP_DATA).
+    record_hz = 2.0
+    last_record = [0.0]
+
+    def _on_packet(packet: Any) -> None:
         if recorder is None:
             return
+        now = time.monotonic()
+        pkt_id = getattr(getattr(packet, "m_header", None), "m_packetId", None)
+        due = (now - last_record[0]) >= (1.0 / record_hz)
+        if not due and pkt_id != F1PacketType.LAP_DATA:
+            return
+        last_record[0] = now
         try:
             recorder.record_state(state.snapshot())
         except Exception:

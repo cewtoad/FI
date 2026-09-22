@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 # Make stt_lib importable (sounddevice lives there).
-_HERE = Path(__file__).parent
+from paths import app_root
+
+_HERE = app_root()
 if str(_HERE / "stt_lib") not in sys.path:
     sys.path.insert(0, str(_HERE / "stt_lib"))
 

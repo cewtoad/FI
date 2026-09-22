@@ -20,6 +20,14 @@ from profiles import LocalRouter, get_profile
 from prompts import build_messages
 from summariser import Summariser
 
+# Shown when a question needs the LLM but no key is configured. Kept
+# actionable: it names the fix and lists what still works without a key.
+UNCONFIGURED_HINT = (
+    "这个问题需要 AI,但你还没配置 key。"
+    "点右上角【设置】填入 LLM_API_KEY 即可(或问本地能答的:"
+    "名次 / 圈数 / 圈速 / 油量 / 胎温 / 轮胎 / 损伤 / 前车差距 / 进站)。"
+)
+
 
 class Engineer:
     """Answers driver questions using the latest telemetry summary."""
@@ -107,7 +115,8 @@ class Engineer:
         client = self.active_client()
         if client is None or not client.configured:
             self.last_error = "LLM 未配置 (LLM_API_KEY / DEEPSEEK_API_KEY)"
-            return "（未配置 AI key）"
+            self.last_source = "no-key"
+            return UNCONFIGURED_HINT
 
         messages = build_messages(question, summary, self.history, profile)
         try:
