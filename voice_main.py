@@ -63,6 +63,13 @@ class VoiceApp:
         self._timer: Optional[threading.Timer] = None
         self.trigger: Optional[RawKeyTrigger] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # T6.2: PTT state machine driven by config (hold/toggle + double-tap).
+        from config import get_config
+        from ptt_controller import PTTController
+        cfg = get_config()
+        self.ptt = PTTController(
+            mode=cfg.get("PTT_MODE", "toggle"),
+            double_tap_window_ms=cfg.get_int("PTT_DOUBLE_TAP_WINDOW_MS", 400))
 
     # -------------------------------------------------------------- telemetry
 
@@ -77,7 +84,49 @@ class VoiceApp:
 
     # ------------------------------------------------------------ key action
 
+    def _on_ptt_press(self) -> None:
+        action = self.ptt.on_press()
+        self._apply_ptt_action(action)
+
+    def _on_ptt_release(self) -> None:
+        action = self.ptt.on_release()
+        self._apply_ptt_action(action)
+
+    def _apply_ptt_action(self, action) -> None:
+        if not action:
+            return
+        if action.kind == "start_recording":
+            with self._lock:
+                if self._busy:
+                    print("[voice] 正在处理上一个问题…", flush=True)
+                    return
+                if not self._recording:
+                    self._start_recording()
+        elif action.kind == "stop_recording":
+            with self._lock:
+                if self._recording:
+                    self._stop_and_answer_locked()
+        elif action.kind == "toggle_quiet":
+            self._toggle_quiet()
+
+    def _toggle_quiet(self) -> None:
+        radio = getattr(self.app, "radio", None)
+        if radio is None:
+            return
+        applied, msg = radio.set_quiet(not radio.quiet_state())
+        from radio_templates import render as _render
+        text = _render(msg)
+        if not applied:
+            text = _render("quiet_locked")
+        if text:
+            print(f"[voice] {text}", flush=True)
+        # Speak the confirmation via the arbiter (system, bypasses gate).
+        if self.arbiter is not None:
+            self.arbiter.play_now(text)
+
     def _on_tap(self) -> None:
+        # Kept for callers that only have a tap callback; the controller's
+        # press/release path is preferred (see RawKeyTrigger on_press/on_release).
         with self._lock:
             if self._busy:
                 print("[voice] 正在处理上一个问题…", flush=True)
@@ -268,8 +317,16 @@ class VoiceApp:
             print("STT 就绪。", flush=True)
         threading.Thread(target=_preload, daemon=True).start()
 
-        self.trigger = RawKeyTrigger(on_tap=self._on_tap, vk=TRIGGER_VK)
-        print("按【小键盘 +】提问：按一下开始录音，再按一下结束。Ctrl+C 退出。\n")
+        # T6.1: resolve the PTT binding (kb:<vk> from config, default NUMPAD +).
+        from config import get_config
+        from input_sources import parse_binding
+        binding = parse_binding(get_config().get("PTT_BINDING", "kb:0x6B"))
+        vk = binding["vk"] if binding and binding["type"] == "kb" else TRIGGER_VK
+        self.trigger = RawKeyTrigger(on_tap=self._on_tap, vk=vk,
+                                     on_press=self._on_ptt_press,
+                                     on_release=self._on_ptt_release)
+        mode = self.ptt.mode
+        print(f"PTT 模式={mode}，按键 VK=0x{vk:02X}。按 {mode} 方式说话，Ctrl+C 退出。\n")
         self.trigger.run_blocking()  # blocks (main thread)
 
 
