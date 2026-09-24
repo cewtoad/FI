@@ -108,6 +108,11 @@ function Build-Full {
     $embed = Join-Path $root "python-embed"
     if (Test-Path $embed) {
         Copy-Item (Join-Path $embed "*") $stage -Recurse -Force
+        # T10b: normalise the embedded ._pth so `import config`/`import lib`
+        # work from the pack root (see tools/fix_embedded_pth.py).
+        Get-ChildItem $stage -Filter "python*._pth" | ForEach-Object {
+            py -3.12 (Join-Path $root "tools\fix_embedded_pth.py") $_.FullName
+        }
     } else {
         Write-Warning "未找到 python-embed (全量包将不附带 embedded Python)。请下载 python-3.12.x-embed-amd64.zip 解压到 python-embed/ 后重试。"
     }

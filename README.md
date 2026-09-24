@@ -33,10 +33,11 @@
 
 | | **轻量核心包** `core` | **全量语音包** `full` |
 |---|---|---|
-| 体积 | 约 25 MB | 约 950 MB |
-| 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `启动.bat` |
+| 体积 | 约 40 MB | 约 950 MB |
+| 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `start.bat`（或 `启动.bat`） |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
-| 语音识别 | 云端 STT（填 key）+ SAPI 播报 | **本地 whisper，完全离线** |
+| 语音播报 | ✅ 已含 sounddevice/numpy，SAPI/edge 可用 | ✅ 本地 whisper + SAPI/edge |
+| 语音识别 | 云端 STT（填 key） | **本地 whisper，完全离线** |
 | 适合 | 大多数人、首次尝试 | 想离线 / 隐私 / 不想买 STT 额度 |
 
 两个包功能相同，只是语音识别后端不同。AI 未配置 key 时，**名次、圈速、油量、
@@ -197,7 +198,7 @@ py -3.12 voice_main.py --list-audio
 
 ### 为什么用 Raw Input / 本地识别？
 
-- **按键检测用 Windows Raw Input**（标准 API，只读，不注入、不挂钩、不映射），全屏游戏时仍可工作。手柄走 XInput 会被游戏独占，键盘不会。
+- **手柄按键**：DualSense/DS5 不是 XInput 设备，改用 Raw Input HID 检测（见 tools/probe_dualsense.py），不依赖 Steam Input/DS4Windows 映射。
 - **语音识别用本地 faster-whisper**，数据不出本机。
 
 ---

@@ -115,3 +115,36 @@
 - 申请 SignPath 签名（见 RELEASE_SIGNING.md，需等审批）
 - 全量包内置 embedded Python（需下载 python-3.12.x-embed-amd64.zip 到 python-embed/）
 - 整理上传
+
+
+## v2（主动工程师）— T0..T10b 已完成（2026-09）
+
+### 已修 bug（本轮）
+- `fuel_per_lap` / `tyre_wear_per_lap` 从未写入 → T1.4 已在每圈过线时 push。
+- 语音模式无 key 时绕过本地快答 → T1.1 统一走 `Engineer.ask(channel="voice")`。
+- “还剩几圈”答成“第 X 圈” → T1.2 拆路由 + facts.laps_remaining。
+- 胎温误报（瞬时表面温度） → T1.3 改用 ~3s 内温中位数（阈值可配，待实测标定）。
+- 2026 规则下仍报 DRS → T1.5 按 regulations_2026 隐藏 DRS，用 Overtake 措辞。
+- `voice_main` 不走 build_app → 语音模式不录会话 → T3.7 已统一。
+
+### 新增能力
+- 原始 UDP 录制/回放：`tools/udp_record.py` / `tools/replay.py`（`.f1rec`）。
+- 推演层：`race_model.py`（Stint/配速衰退/GapTrend/PitWindow/天气/排位支撑）。
+- 主动播报：`radio_rules.py` / `radio_templates.py` / `radio_director.py`（**无 LLM**）。
+- 统一语音出口：`speech.py`（SpeechArbiter + 非阻塞 AudioPlayer）。
+- 语音交互：`ptt_controller.py`（hold/toggle/双击静音）、`input_sources.py`、DualSense HID probe。
+- 配置页：`config_ui.py`（`FI.py --config`，端口 8766）。
+- 赛后复盘：`debrief.py`（本地 TXT，不调 LLM）。
+- 分发：`build_manifest.py`、`tools/make_zip.py`、`start.bat`、`tools/fix_embedded_pth.py`。
+
+### 待实测 / 停止点
+- **胎温阈值标定**：`TYRE_HOT_INNER_C` 默认 110 为占位值，需回放真实数据标定。
+- **DualSense HID 报告偏移**：需跑 `py -3.12 -m tools.probe_dualsense` 实测后再启用 HID 源。
+- **edge MP3 解码**：当前 AudioPlayer 只原生解码 WAV；edge 返回 MP3 需要新依赖（audioop 已被 3.13 删除，禁用），未决。
+- **Piper**：import 名/API 未核实，provider 暂禁用。
+- **embedded `._pth`**：已加规范化脚本，仍需在真实全量包上验证 `import config/lib`。
+
+### 文档对齐（本轮）
+- 核心包不再 exclude sounddevice/numpy → 语音模式在核心包可用。
+- DS5 非 XInput 设备，按键检测用 Raw Input HID（README 原“XInput 被游戏独占”说法已过时）。
+- STT/TTS 标记为已实现（DESIGN）。

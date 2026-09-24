@@ -1,7 +1,7 @@
 """Unified voice entry: telemetry receiver + push-to-talk voice Q&A in one process.
 
 Model:
-    main thread   -> Raw Input message loop (NUM0 tap starts/stops recording)
+    main thread   -> Raw Input message loop (小键盘 + tap starts/stops recording)
     worker thread -> asyncio loop running the UDP receiver, keeping TelemetryState
     on tap        -> record -> STT -> Engineer.ask(latest snapshot) -> TTS
 
