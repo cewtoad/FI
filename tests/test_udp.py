@@ -62,3 +62,18 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# --- pytest entry point (T0: script-style -> pytest) ---
+
+import asyncio as _asyncio
+import os as _os
+
+import pytest as _pytest
+
+
+@_pytest.mark.network
+def test_main() -> None:
+    if _os.environ.get("RUN_NETWORK_TESTS") != "1":
+        _pytest.skip("needs loopback UDP (set RUN_NETWORK_TESTS=1)")
+    _asyncio.run(main())

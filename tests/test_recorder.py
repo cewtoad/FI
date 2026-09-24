@@ -95,3 +95,9 @@ async def main():
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     asyncio.run(main())
+
+
+# --- pytest entry point (T0: script-style -> pytest) ---
+
+def test_main() -> None:
+    main()

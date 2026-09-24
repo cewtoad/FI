@@ -87,3 +87,15 @@ def main():
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     main()
+
+
+# --- pytest entry point (T0: script-style -> pytest) ---
+
+import asyncio as _asyncio
+import inspect as _inspect
+
+
+def test_main() -> None:
+    result = main()
+    if _inspect.isawaitable(result):
+        _asyncio.run(result)

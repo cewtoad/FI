@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import socket
+from pathlib import Path
 
 import paths
 
+# tests/ lives one level under the repository root that paths.py is anchored to.
+ROOT = Path(__file__).resolve().parent.parent
+
 
 def test_app_root_is_project_dir_in_source():
-    # From source, app_root() == this file's directory.
-    assert paths.app_root() == paths.Path(__file__).resolve().parent
+    # From source, app_root() == the directory paths.py lives in (repo root).
+    assert paths.app_root() == ROOT
 
 
 def test_app_root_honours_env_override(monkeypatch, tmp_path):
