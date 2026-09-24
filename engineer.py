@@ -91,6 +91,18 @@ class Engineer:
         c = self.active_client()
         return bool(c is not None and c.configured)
 
+    def _names(self):
+        """Lazily build a NameRenderer from config (for rival-pace lookup)."""
+        with self._lock:
+            if getattr(self, "_name_renderer", None) is None:
+                try:
+                    from names import NameRenderer
+                    style = self._cfg.get("DRIVER_NAME_STYLE", "zh") or "zh"
+                    self._name_renderer = NameRenderer(style=style)
+                except Exception:  # noqa: BLE001
+                    self._name_renderer = None
+            return self._name_renderer
+
     def describe(self) -> Dict[str, Any]:
         c = self.active_client()
         desc = c.describe() if c is not None else {}
@@ -121,7 +133,9 @@ class Engineer:
 
         # 1) Deterministic local answer (no LLM).
         if profile.local_first:
-            fast = self.router.answer(question, summary.get("facts", {}))
+            fast = self.router.answer(question, summary.get("facts", {}),
+                                      leaderboard=summary.get("leaderboard"),
+                                      name_renderer=self._names())
             if fast is not None:
                 answer = fast.text
                 self.last_source = "local"

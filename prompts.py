@@ -38,6 +38,8 @@ SYSTEM_PROMPT = """你是车手的赛车工程师(race engineer),通过无线电
 禁止:
 - 不要输出思考、解释、markdown、列表符号、编号。
 - 不要报流水账。只给车手听的那一句。
+- 【硬规则】不得给出进站指令(不说"进站吧/该进站/Box"这类祈使句),
+  只陈述窗口与后果(如"窗口已开""最晚第X圈""出站预计第Y位")。
 - 不要主动补充车手没问的信息,不加"注意/另外/目前"式的额外提醒。
   除非车手问的正是那件事。例:问"我圈速多少",只答圈速,别附加"正对前车发起攻击"。"""
 
@@ -96,6 +98,37 @@ def _trim_leaderboard(leaderboard: list, top: int = 3) -> list:
     return out
 
 
+def _select_facts(question: str, facts: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the fact subset relevant to the question's intent (T9).
+
+    Namespaced prefixes: tyre.*/stint.*/pace.*, gap.*/position.*,
+    pit.*/fuel.*. Matching keeps only those namespaces plus the always-useful
+    core (lap/position/compound). No match -> full facts (safe default).
+    """
+    q = (question or "").lower()
+    groups = []
+    if any(k in q for k in ("胎", "轮胎", "磨损", "胎温", "stint", "衰退")):
+        groups.append(("tyre", "stint", "pace"))
+    if any(k in q for k in ("前车", "后面", "落后", "差距", "追", "超", "名次", "位置", "gap")):
+        groups.append(("gap", "position"))
+    if any(k in q for k in ("进站", "策略", "油", "窗口", "pit", "fuel", "plan")):
+        groups.append(("pit", "fuel", "stint"))
+    if any(k in q for k in ("天气", "雨", "weather", "rain")):
+        groups.append(("weather",))
+    if any(k in q for k in ("排位", "最快圈", "杆位", "quali")):
+        groups.append(("qualifying",))
+    prefixes = tuple(f"{g}." for grp in groups for g in grp)
+    core = ("lap", "total_laps", "position", "last_lap_time", "best_lap_time",
+            "current_lap_time", "tyre_compound", "tyre_age_laps", "speed_kph")
+    if not prefixes:
+        return facts
+    out = {}
+    for k, v in facts.items():
+        if k in core or k.startswith(prefixes):
+            out[k] = v
+    return out or facts
+
+
 def build_messages(question: str, summary: Dict[str, Any],
                    history: list | None = None, profile: Any = None) -> list:
     """Assemble the message list for the chat API.
@@ -110,6 +143,9 @@ def build_messages(question: str, summary: Dict[str, Any],
     notes = summary.get("notes", [])
     leaderboard = summary.get("leaderboard")
     recent_events = summary.get("recent_events")
+    # T9: pick only the fact namespaces relevant to the question (cheaper,
+    # sharper). Unmatched intents fall back to the full facts.
+    facts = _select_facts(question, facts)
     snapshot = build_snapshot_text(facts, notes, leaderboard, recent_events)
 
     system = SYSTEM_PROMPT

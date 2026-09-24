@@ -159,6 +159,10 @@ class Summariser:
             if any(v is not None for v in tw):
                 facts["tyre_wear_pct"] = [round(v, 1) if v is not None else None for v in tw]
 
+        # T9: namespaced facts from the race model (flat keys kept for the
+        # router; these add trend/window context for the LLM).
+        self._add_race_model_facts(facts, snap, regs_2026)
+
         # Pit status.
         if lap.get("pit_status") and lap.get("pit_status") != "NONE":
             facts["pit_status"] = lap.get("pit_status")
@@ -212,6 +216,41 @@ class Summariser:
         }
 
     # ------------------------------------------------------------- note rules
+
+    def _add_race_model_facts(self, facts, snap, regs_2026) -> None:
+        rm = snap.get("race_model")
+        if not rm:
+            return
+        stint = rm.get("stint") or {}
+        if stint:
+            facts["stint.compound"] = stint.get("compound")
+            facts["stint.laps"] = stint.get("laps")
+            facts["stint.wear_pct"] = stint.get("wear_now_pct")
+            facts["stint.wear_rate_pct_per_lap"] = stint.get("wear_rate_pct_per_lap")
+            facts["pace.degradation_s_per_lap"] = stint.get("pace_degradation_s_per_lap")
+        if rm.get("tyre_laps_to_limit") is not None:
+            facts["stint.tyre_laps_to_limit"] = round(float(rm["tyre_laps_to_limit"]), 1)
+        ahead = rm.get("ahead") or {}
+        behind = rm.get("behind") or {}
+        if ahead:
+            facts["gap.ahead_ms"] = ahead.get("gap_ms_now")
+            facts["gap.ahead_closing_ms_per_lap"] = ahead.get("closing_rate_ms_per_lap")
+            if ahead.get("laps_to_1s") is not None:
+                facts["gap.laps_to_1s"] = ahead.get("laps_to_1s")
+        if behind:
+            facts["gap.behind_ms"] = behind.get("gap_ms_now")
+        pw = rm.get("pit_window") or {}
+        if pw:
+            facts["pit.window_state"] = pw.get("state")
+            facts["pit.ideal_lap"] = pw.get("ideal_lap")
+            facts["pit.latest_lap"] = pw.get("latest_lap")
+            facts["pit.rejoin_position"] = pw.get("rejoin_position")
+        if rm.get("fuel_laps_left") is not None:
+            facts["fuel.laps_left"] = rm.get("fuel_laps_left")
+        if rm.get("rain_eta_min") is not None:
+            facts["weather.rain_eta_min"] = rm.get("rain_eta_min")
+        if rm.get("field_best_lap_ms") is not None:
+            facts["qualifying.field_best"] = _fmt_ms(rm.get("field_best_lap_ms"))
 
     def _tyre_notes(self, car, status) -> List[str]:
         out: List[str] = []
