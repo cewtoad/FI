@@ -19,6 +19,39 @@ from typing import Optional
 from config import get_config
 
 
+def _sapi_rate(rate) -> Optional[int]:
+    """Coerce a rate into SAPI's -10..10 integer (T3.5 conversion layer).
+
+    Percent-style values ("+10%") are edge's -100..100 scale, divided by 10 to
+    SAPI's -10..10. Bare integers are treated as already-SAPI-scale.
+    """
+    if rate is None or rate == "":
+        return None
+    text = str(rate).strip()
+    percent = text.endswith("%")
+    try:
+        v = int(float(text.replace("%", "").replace("+", "")))
+    except (TypeError, ValueError):
+        return None
+    if percent:
+        v = v // 10
+    return max(-10, min(10, v))
+
+
+def _edge_rate(rate) -> Optional[str]:
+    """Coerce a rate into edge's "+N%" string."""
+    if rate is None or rate == "":
+        return None
+    text = str(rate).strip()
+    if text.endswith("%"):
+        return text if text.startswith(("+", "-")) else f"+{text}"
+    try:
+        v = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return f"{'+' if v >= 0 else ''}{v * 10}%"
+
+
 class TTSEngine:
     """Base class for swappable TTS providers."""
 
@@ -45,9 +78,11 @@ class EdgeTTS(TTSEngine):
     name = "edge"
     mime = "audio/mpeg"
 
-    def __init__(self) -> None:
+    def __init__(self, voice: Optional[str] = None,
+                 rate=None) -> None:
         cfg = get_config()
-        self.voice = cfg.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural").strip()
+        self.voice = (voice or cfg.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural")).strip()
+        self.rate = _edge_rate(rate)
         try:
             import edge_tts
         except Exception:  # optional dependency not installed
@@ -65,7 +100,10 @@ class EdgeTTS(TTSEngine):
         import asyncio
 
         async def _run() -> bytes:
-            communicate = self._edge_tts.Communicate(text, self.voice)
+            kwargs = {}
+            if self.rate:
+                kwargs["rate"] = self.rate
+            communicate = self._edge_tts.Communicate(text, self.voice, **kwargs)
             buf = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -88,10 +126,11 @@ class SapiTTS(TTSEngine):
     name = "sapi"
     mime = "audio/wav"
 
-    def __init__(self) -> None:
+    def __init__(self, voice: Optional[str] = None, rate=None) -> None:
         cfg = get_config()
-        self.voice = cfg.get("TTS_SAPI_VOICE", "").strip()
+        self.voice = (voice or cfg.get("TTS_SAPI_VOICE", "")).strip()
         self.timeout = float(cfg.get("TTS_TIMEOUT", "30"))
+        self.rate = _sapi_rate(rate)
 
     @property
     def available(self) -> bool:
@@ -109,10 +148,13 @@ class SapiTTS(TTSEngine):
             safe_text = text.replace("'", "''").replace("\r", " ").replace("\n", " ")
             select = (f"try {{ $s.SelectVoice('{safe_voice}') }} catch {{ }}"
                       if self.voice else "")
+            set_rate = (f"try {{ $s.Rate = {self.rate} }} catch {{ }}"
+                        if self.rate is not None else "")
             script = (
                 "Add-Type -AssemblyName System.Speech\n"
                 "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
                 f"{select}\n"
+                f"{set_rate}\n"
                 f"$s.SetOutputToWaveFile('{out}')\n"
                 f"$s.Speak('{safe_text}')\n"
                 "$s.Dispose()\n")

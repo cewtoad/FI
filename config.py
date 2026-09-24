@@ -20,6 +20,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import config_schema
 from paths import app_root
 
 _ENV_PATH = app_root() / ".env"
@@ -52,21 +53,28 @@ def load_dotenv(path: Optional[Path] = None) -> Dict[str, str]:
     return parse_env_file(path)
 
 
+def _to_env_str(value: Any) -> str:
+    """Serialise a coerced setting value for the .env file."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
 class Config:
     """Thread-safe config store with a small runtime-mutable overlay."""
 
-    # Keys that may be changed at runtime and written back to .env.
-    RUNTIME_KEYS = frozenset({
-        "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
-        "PROFILE",
-        "AUDIO_INPUT", "AUDIO_OUTPUT",
-    })
+    # Keys that may be changed at runtime and written back to .env. Derived
+    # from the schema (T3.2); the original six keys remain runtime.
+    RUNTIME_KEYS = config_schema.runtime_keys()
 
     def __init__(self, env_path: Optional[Path] = None) -> None:
         self._env_path = env_path or _ENV_PATH
         self._lock = threading.RLock()
         self._overlay: Dict[str, str] = {}
         self._env = self._read()
+        # T3.2: last persist failure (None = ok). Written under the lock.
+        self.last_persist_error: Optional[str] = None
+        self._env_mtime: Optional[float] = self._current_mtime()
 
     # ------------------------------------------------------------ reading
 
@@ -99,6 +107,14 @@ class Config:
         except (TypeError, ValueError):
             return default
 
+    def get_bool(self, key: str, default: bool = False) -> bool:
+        v = self.get(key, "1" if default else "0").strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return True
+        if v in ("0", "false", "no", "off", ""):
+            return False
+        return default
+
     def as_dict(self) -> Dict[str, str]:
         with self._lock:
             return {**self._env, **self._overlay}
@@ -106,17 +122,28 @@ class Config:
     # ------------------------------------------------------------ writing
 
     def set_runtime(self, key: str, value: str, persist: bool = True) -> None:
-        """Change a runtime key. Persists to .env when requested."""
+        """Change a runtime key. Persists to .env when requested.
+
+        Validates the value against the schema (type/range/choices) and raises
+        ValueError on a bad value (the previous code only checked the key).
+        """
         if key not in self.RUNTIME_KEYS:
             raise KeyError(f"not a runtime key: {key}")
+        coerced = config_schema.validate(key, value)
+        stored = _to_env_str(coerced)
         with self._lock:
-            self._overlay[key] = value
-            self._env[key] = value
+            self._overlay[key] = stored
+            self._env[key] = stored
         if persist:
-            self._persist({key: value})
+            self._persist({key: stored})
 
     def _persist(self, updates: Dict[str, str]) -> None:
-        """Rewrite the .env file with the updated keys (creates if missing)."""
+        """Rewrite the .env file with the updated keys (atomic, T3.2).
+
+        Writes to a temp file then os.replace()s it into place so a crash or a
+        concurrent reader never sees a half-written .env. Failures are recorded
+        in ``last_persist_error`` instead of being swallowed silently.
+        """
         lines: list = []
         if self._env_path.exists():
             lines = self._env_path.read_text(encoding="utf-8-sig").splitlines()
@@ -136,9 +163,56 @@ class Config:
                 out.append(f"{k}={v}")
         try:
             with self._lock:
-                self._env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+                tmp = self._env_path.with_suffix(self._env_path.suffix + ".tmp")
+                tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+                os.replace(tmp, self._env_path)
+                self._env_mtime = self._current_mtime()
+                self.last_persist_error = None
+        except OSError as e:
+            # Read-only filesystem: the change still applies in memory.
+            with self._lock:
+                self.last_persist_error = f"{type(e).__name__}: {e}"
+
+    # ---------------------------------------------------------- file watch
+
+    def _current_mtime(self) -> Optional[float]:
+        try:
+            return self._env_path.stat().st_mtime
         except OSError:
-            pass  # read-only filesystem: runtime change still applies in-memory
+            return None
+
+    def reload_if_changed(self) -> bool:
+        """Re-read .env if its mtime changed. Returns True when reloaded.
+
+        File values win over the overlay for keys the file now defines (avoids
+        a long-running process serving a stale value after the config page,
+        which is a separate process, rewrote .env).
+        """
+        mtime = self._current_mtime()
+        with self._lock:
+            if mtime is None or mtime == self._env_mtime:
+                return False
+            self._env = self._read()
+            self._env_mtime = mtime
+            # Drop overlay entries the file now defines (file wins).
+            for key in list(self._overlay):
+                if key in self._env:
+                    del self._overlay[key]
+        return True
+
+    def is_writable(self) -> bool:
+        """True when the .env file (or its directory) can be written."""
+        try:
+            if self._env_path.exists():
+                with open(self._env_path, "a", encoding="utf-8"):
+                    pass
+            else:
+                probe = self._env_path.parent / ".f1tr_write_probe"
+                probe.write_text("", encoding="utf-8")
+                probe.unlink()
+            return True
+        except OSError:
+            return False
 
 
 # Process-wide default instance used by the app. Tests may build their own.

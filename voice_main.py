@@ -21,6 +21,7 @@ import time
 from typing import Optional
 
 import audio
+from app import build_app
 from engineer import Engineer
 from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
 from state import TelemetryState
@@ -36,17 +37,21 @@ class VoiceApp:
     def __init__(self, port: int, bind_ip: str, input_dev: str, output_dev: str,
                  logger: logging.Logger) -> None:
         self.logger = logger
-        # Telemetry side
-        self.state = TelemetryState(error_logger=logger)
-        self.receiver = TelemetryReceiver(
-            self.state, port=port, bind_ip=bind_ip,
-            interested=PACKETS_CONSUMED, logger=logger)
+        # T3.7: assemble through the single composition root, so voice mode
+        # shares the receiver/state/engineer/recorder wiring (and now records
+        # sessions like the web path). mode="voice" also builds a
+        # SpeechArbiter, which the radio director / answers route through.
+        self.app = build_app(port=port, bind_ip=bind_ip, logger=logger,
+                             mode="voice", audio_output=output_dev)
+        self.state = self.app.state
+        self.receiver = self.app.receiver
+        self.engineer = self.app.engineer
+        self.arbiter = self.app.speech
 
         # Voice side
         self.recorder = StreamingRecorder(input_device=input_dev,
                                           max_seconds=MAX_RECORD_S)
         self.tts = LocalTTS(output_device=output_dev)
-        self.engineer = Engineer()
         self.input_dev = input_dev or audio.current()["input"]
         # Load the STT model ONCE (loading takes ~20s; never do it per-answer).
         self._stt = None
@@ -83,10 +88,16 @@ class VoiceApp:
                 self._stop_and_answer_locked()
 
     def _start_recording(self) -> None:
+        # PTT interrupts any ongoing speech (decided in §1 / T6).
+        if self.arbiter is not None:
+            self.arbiter.interrupt_all()
+            self.arbiter.set_recording(True)
         try:
             self.recorder.start()
         except Exception as e:  # noqa: BLE001
             print(f"[voice] 录音启动失败: {e}", flush=True)
+            if self.arbiter is not None:
+                self.arbiter.set_recording(False)
             return
         self._recording = True
         self._timer = threading.Timer(MAX_RECORD_S + 0.5, self._auto_stop)
@@ -119,13 +130,20 @@ class VoiceApp:
                 self.recorder.stop()
             except Exception:
                 pass
+            if self.arbiter is not None:
+                self.arbiter.set_recording(False)
             print("[voice] 录音太短（没收到音频），已忽略", flush=True)
             return
         try:
             pcm = self.recorder.stop()
         except Exception as e:  # noqa: BLE001
+            if self.arbiter is not None:
+                self.arbiter.set_recording(False)
             print(f"[voice] 停止录音失败: {e}", flush=True)
             return
+        # Recording is done: let the radio resume while STT/AI runs.
+        if self.arbiter is not None:
+            self.arbiter.set_recording(False)
         self._busy = True
         threading.Thread(target=self._process, args=(pcm,), daemon=True).start()
 
@@ -168,10 +186,21 @@ class VoiceApp:
                   f"tokens={usage.get('total_tokens')})", flush=True)
             print(f"[voice] AI: {answer}", flush=True)
 
-            # TTS
+            # TTS: route through the single audio outlet (SpeechArbiter) so a
+            # driver answer interrupts any proactive radio and bypasses the
+            # straight-line gate. Falls back to the local shim if unavailable.
             t2 = time.time()
             print("[voice] 播报中…", flush=True)
-            self.tts.speak(answer)
+            if self.arbiter is not None:
+                from contracts import PRIORITY_ANSWER, Utterance
+                self.arbiter.interrupt_all()
+                self.arbiter.submit(Utterance(
+                    text=answer, priority=PRIORITY_ANSWER, source="answer",
+                    created_at=time.monotonic(), gated=False))
+                while self.arbiter.is_speaking():
+                    time.sleep(0.05)
+            else:
+                self.tts.speak(answer)
             print(f"[voice] TTS 耗时 {time.time()-t2:.2f}s", flush=True)
         finally:
             self._busy = False
@@ -194,6 +223,12 @@ class VoiceApp:
         t = threading.Thread(target=self._run_receiver, daemon=True)
         t.start()
         print(f"遥测接收已启动 (UDP {self.receiver.port})")
+        # T3.7/T5: start the ticker (race model + radio director) and the
+        # speech arbiter built by build_app().
+        try:
+            self.app.start_background()
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("background pipeline failed to start: %r", e)
 
         # Show which devices will be used (resolved live per take from here
         # on, so this is just the status at startup).
@@ -270,6 +305,10 @@ def main() -> None:
     finally:
         if app.trigger:
             app.trigger.stop()
+        try:
+            app.app.shutdown()
+        except Exception:
+            pass
         print("\n退出。")
 
 

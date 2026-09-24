@@ -519,6 +519,9 @@ class _Handler(BaseHTTPRequestHandler):
                     "stt": ctx["voice"].stt_available,
                     "tts": ctx["voice"].tts_available,
                 },
+                # T5.1: proactive radio alerts (web mode shows an alert bar).
+                "alerts": list(ctx.get("alert_log", [])),
+                "race_model": snap.get("race_model"),
             }
             self._send(200, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
@@ -748,6 +751,12 @@ def serve(port: int = 20777, web_port: int = 8765,
     t = threading.Thread(target=_receiver_thread,
                          args=(app.state, app.receiver, logger), daemon=True)
     t.start()
+    # T3.8: run the ticker (race model + radio director) in web mode too; the
+    # web path has no speech arbiter, so alerts go to the in-memory AlertLog.
+    try:
+        app.start_background()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("background pipeline failed to start: %r", e)
 
     httpd = ThreadingHTTPServer((bind_ip, web_port), _Handler)
     httpd.ctx = app.ctx()  # type: ignore[attr-defined]

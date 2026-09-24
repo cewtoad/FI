@@ -36,6 +36,11 @@ class App:
     engineer: Engineer
     recorder: Optional[SessionRecorder] = None
     extras: dict = field(default_factory=dict)
+    mode: str = "web"
+    ticker: Any = None
+    race_model: Any = None
+    radio: Any = None
+    speech: Any = None
 
     def ctx(self) -> dict:
         """The context dict the HTTP layer expects."""
@@ -48,12 +53,43 @@ class App:
             **self.extras,
         }
 
+    def start_background(self) -> None:
+        """Start the ticker (and speech arbiter) if present."""
+        if self.speech is not None:
+            try:
+                self.speech.start()
+            except Exception:
+                pass
+        if self.ticker is not None:
+            self.ticker.start()
+
+    def shutdown(self) -> None:
+        if self.ticker is not None:
+            try:
+                self.ticker.stop()
+            except Exception:
+                pass
+        if self.speech is not None:
+            try:
+                self.speech.stop()
+            except Exception:
+                pass
+        raw_fh = self.extras.get("raw_fh")
+        if raw_fh is not None:
+            try:
+                raw_fh.close()
+            except Exception:
+                pass
+
 
 def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
               logger: Optional[logging.Logger] = None,
               recording: bool = True,
               record_raw: bool = False,
-              raw_path: Optional[str] = None) -> App:
+              raw_path: Optional[str] = None,
+              mode: str = "web",
+              tts_engine: Any = None,
+              audio_output: str = "") -> App:
     logger = logger or logging.getLogger("f1_tr")
     state = TelemetryState(error_logger=logger)
     recorder = SessionRecorder() if recording else None
@@ -102,8 +138,117 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
         on_packet=_on_packet, raw_sink=raw_sink)
     engineer = Engineer()
     app = App(state=state, receiver=receiver, summariser=Summariser(),
-              engineer=engineer, recorder=recorder)
+              engineer=engineer, recorder=recorder, mode=mode)
     if raw_fh is not None:
         app.extras["raw_file"] = str(raw_file)
         app.extras["raw_fh"] = raw_fh
+
+    # ---- T3.8: race model + ticker + (voice) speech arbiter ----
+    _assemble_pipeline(app, logger=logger, tts_engine=tts_engine,
+                       audio_output=audio_output)
     return app
+
+
+def _assemble_pipeline(app: "App", logger, tts_engine=None,
+                       audio_output: str = "") -> None:
+    """Wire the race model, radio director, ticker and (voice) arbiter.
+
+    Uses lazy imports and tolerates the pieces not existing yet so the
+    composition root stays the single wiring point across tasks.
+    """
+    from ticker import Ticker
+
+    # Race model (T4). Optional so build_app works before/without it.
+    race_model = None
+    try:
+        from race_model import RaceModel
+        race_model = RaceModel(config=get_config())
+        # Merge {"race_model": <RaceModelState dict>} into the snapshot.
+        state_dict = getattr(race_model, "latest_dict", None)
+        if state_dict is not None:
+            app.state.add_snapshot_provider(lambda: {"race_model": state_dict()})
+        app.race_model = race_model
+    except Exception as e:  # noqa: BLE001
+        logger.debug("race model unavailable: %r", e)
+
+    # Radio director (T5). Optional. Its AlertSink differs by mode.
+    try:
+        from radio_director import RadioDirector
+        from radio_rules import build_default_rules
+
+        sink = _make_alert_sink(app, logger)
+        radio = RadioDirector(rules=build_default_rules(),
+                              alert_sink=sink,
+                              config=get_config())
+        app.radio = radio
+    except Exception as e:  # noqa: BLE001
+        logger.debug("radio director unavailable: %r", e)
+
+    # Speech arbiter: only for voice mode (web mode uses the AlertLog only).
+    if app.mode == "voice":
+        try:
+            from speech import AudioPlayer, SpeechArbiter
+            from voices import make_tts as make_voice_tts
+
+            engine = tts_engine or make_voice_tts()
+            player = AudioPlayer(output_device=audio_output, logger=logger)
+            gate = None
+            if app.state is not None:
+                def gate():  # noqa: E306
+                    hold = get_config().get_float("RADIO_GATE_HOLD_S", 0.5)
+                    return app.state.is_on_straight(hold)
+            app.speech = SpeechArbiter(engine, player, gate=gate,
+                                       clock=time.monotonic, logger=logger)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("speech arbiter unavailable: %r", e)
+
+    # Ticker: drives race model + radio director every beat. Config hot-reload.
+    ticker = Ticker(rate_hz=2.0,
+                    snapshot_provider=app.state.snapshot,
+                    logger=logger)
+
+    def _tick(snapshot: dict, now: float) -> None:
+        try:
+            get_config().reload_if_changed()
+        except Exception:
+            pass
+        if race_model is not None:
+            race_model.update(snapshot, now)
+        if app.radio is not None:
+            app.radio.tick(snapshot, now)
+
+    ticker.add(_tick, "pipeline")
+    app.ticker = ticker
+
+
+def _make_alert_sink(app: "App", logger):
+    """Return a callable(Alert) -> None for the radio director (T5.1)."""
+    from contracts import PRIORITY_ANSWER
+    mode = app.mode
+
+    if mode == "voice" and app.speech is not None:
+        def _voice_sink(alert):
+            from contracts import Utterance
+            app.speech.submit(Utterance(
+                text=alert.text, priority=alert.priority, source="rule",
+                created_at=alert.created_at, dedup_key=alert.dedup_key,
+                gated=(alert.priority > PRIORITY_ANSWER)))
+        return _voice_sink
+
+    # Web / console: keep an in-memory alert log (exposed via /api/state).
+    from collections import deque
+    log = deque(maxlen=200)
+    app.extras["alert_log"] = log
+
+    def _log_sink(alert):
+        log.append({
+            "id": alert.id, "category": alert.category,
+            "priority": alert.priority, "text": alert.text,
+            "created_at": alert.created_at,
+        })
+    return _log_sink
+
+
+def get_config():
+    from config import get_config as _gc
+    return _gc()

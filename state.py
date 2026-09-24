@@ -64,6 +64,9 @@ class TelemetryState:
         self.packet_errors: Dict[str, int] = {}
         # T1.3: rolling (ts, inner_temp_c list) samples for the tyre median.
         self._tyre_inner_samples: deque = deque()
+        # T5.7: monotonic timestamp when the car last met the "straight"
+        # condition (throttle/brake/steer); None while not on a straight.
+        self._straight_since: Optional[float] = None
 
         # Trend histories (per-lap samples)
         self.lap_times_ms: RollingHistory = RollingHistory(self.HISTORY_LAPS)
@@ -132,6 +135,17 @@ class TelemetryState:
         self._frozen: Dict[str, Any] = {}
         self._frozen_at: float = 0.0
         self._snap_dirty: bool = True
+        # T3.8: extra snapshot providers (e.g. the race model). Each returns a
+        # dict merged under its own key into every built snapshot.
+        self._snapshot_providers: List[Callable[[], Dict[str, Any]]] = []
+
+    def add_snapshot_provider(self, fn: Callable[[], Dict[str, Any]]) -> None:
+        """Register a provider merged into every snapshot (T3.8).
+
+        The provider is called under no lock; it must return a plain dict and
+        do its own internal locking (the race model does).
+        """
+        self._snapshot_providers.append(fn)
 
     # ---------------------------------------------------------------- session
 
@@ -169,6 +183,7 @@ class TelemetryState:
         self._fuel_lap_num = None
         self._all_lap_data = None
         self._tyre_inner_samples = deque()
+        self._straight_since = None
         self._participants = {}
         self._all_car_status = None
         self.leaderboard = []
@@ -546,6 +561,43 @@ class TelemetryState:
             cutoff = self._clock() - self.TYRE_TEMP_MEDIAN_WINDOW_S
             while self._tyre_inner_samples and self._tyre_inner_samples[0][0] < cutoff:
                 self._tyre_inner_samples.popleft()
+        # T5.7: track "straight since" for the radio timing gate. Updated at
+        # the telemetry rate (much finer than the 2Hz snapshot).
+        self._update_straight(car.m_throttle, car.m_brake, car.m_steer)
+
+    def _straight_thresholds(self):
+        try:
+            from config import get_config
+            cfg = get_config()
+            return (cfg.get_float("RADIO_GATE_THROTTLE", 0.9),
+                    cfg.get_float("RADIO_GATE_BRAKE", 0.05),
+                    cfg.get_float("RADIO_GATE_STEER", 0.15))
+        except Exception:  # noqa: BLE001
+            return 0.9, 0.05, 0.15
+
+    def _update_straight(self, throttle, brake, steer) -> None:
+        thr, brk, st = self._straight_thresholds()
+        now = self._clock()
+        on = (throttle is not None and throttle >= thr
+              and brake is not None and brake <= brk
+              and steer is not None and abs(steer) <= st)
+        if on:
+            if self._straight_since is None:
+                self._straight_since = now
+        else:
+            self._straight_since = None
+
+    def is_on_straight(self, hold_s: float = 0.5,
+                       clock: Optional[Callable[[], float]] = None) -> bool:
+        """True when the car has been on a straight for at least ``hold_s`` (T5.7).
+
+        Polled by the arbiter at ~20Hz; reads the fine-grained timestamp the
+        telemetry handler maintains (not the 2Hz snapshot).
+        """
+        if self._straight_since is None:
+            return False
+        now = (clock or self._clock)()
+        return (now - self._straight_since) >= hold_s
 
     def tyre_inner_temp_median_c(self) -> Optional[List[float]]:
         """Median inner temperature per wheel over the last ~3s (T1.3).
@@ -1189,6 +1241,17 @@ class TelemetryState:
         if isinstance(car, dict):
             car["tyres_inner_temp_median_c"] = self.tyre_inner_temp_median_c()
 
+        # T3.8: merge extension providers (race model etc.) into the snapshot.
+        extra: Dict[str, Any] = {}
+        for fn in list(self._snapshot_providers):
+            try:
+                result = fn()
+                if isinstance(result, dict):
+                    # Providers return {namespace: value}; merge each key.
+                    extra.update(copy.deepcopy(result))
+            except Exception:  # noqa: BLE001 - a bad provider must not break RX
+                pass
+
         return {
             "session": {
                 "session_uid": self.session_uid,
@@ -1226,4 +1289,5 @@ class TelemetryState:
                 self.latest.get("final_classification")),
             # T4.1: full per-lap snapshots for the race model / debrief.
             "lap_snapshots": copy.deepcopy(self.lap_snapshots),
+            **extra,
         }
