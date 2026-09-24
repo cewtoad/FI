@@ -148,3 +148,76 @@
 - 核心包不再 exclude sounddevice/numpy → 语音模式在核心包可用。
 - DS5 非 XInput 设备，按键检测用 Raw Input HID（README 原“XInput 被游戏独占”说法已过时）。
 - STT/TTS 标记为已实现（DESIGN）。
+
+
+## 输入触发方式（PTT）— 架构现状与待办
+
+> 目标：支持三种物理输入作为"按键说话(PTT)"触发源：**键盘**、**手柄**、
+> **方向盘/其他外设**。三者必须可共存、可切换，且互不影响主系统。
+
+### 隔离设计（已落地，改动面被限制在一个文件）
+
+- 抽象层 `input_sources.py`：
+  - `InputSource`（基类）：统一 `on_press` / `on_release` / `on_tap` 回调 +
+    `start()` / `stop()`。
+  - `KeyboardSource`：包装 `voice_trigger.RawKeyTrigger`（**已启用、已验证**）。
+  - `HidSource`：通用 HID 按键源（**已实现骨架，默认禁用**，待偏移确认）。
+- 唯一工厂 `make_source(binding, ..., enable_hid=False)`：按 binding 前缀
+  分派 `kb:<vk>` / `hid:VID:PID:byte:mask`。**HID 默认门控关闭**，非键盘
+  绑定在未确认前返回 `None`。
+- 上层（`ptt_controller` 纯状态机、`voice_main`、`speech`、`radio_*`）**完全不
+  感知输入源类型**，只接收 press/release/tap 事件。
+
+**结论：完善手柄/方向盘支持只需改 `input_sources.py`（+ 配置项），
+不影响 ptt_controller / voice_main / speech / radio / app / state / 任何测试。**
+
+### 现状
+
+| 输入方式 | 状态 | 绑定格式 | 备注 |
+|---|---|---|---|
+| 键盘 | ✅ 可用（默认） | `kb:<vk>`，默认 `kb:0x6B`（小键盘 +） | 全屏可用，Raw Input 只订阅 |
+| DualSense 手柄 | ⚠️ 未闭环（本机实测失败） | `hid:VID:PID:byte:mask` | 见下方"实测记录" |
+| 方向盘 / 其他外设 | ⏳ 未做（用户暂无设备） | 同上（通用 HID） | 待有设备后按同一流程做 |
+
+### 实测记录：DualSense（VID_054C PID_0CE6）— 未闭环
+
+- 设备在系统中存在：`HID\VID_054C&PID_0CE6&MI_03`（`Get-PnpDevice -Class HIDClass`）。
+- Raw Input 能收到报告：`len=64`，`report_id=0x01`，约 250Hz，静止时平均
+  **20+ 字节/帧在变**（陀螺仪/触控/扳机噪声）。
+- 三种探测法均无法定位 R1：
+  1. `--scan`：只有一个报告 `len=64 id=0x01`，按钮与传感器混在同一报告。
+  2. `--diff-auto`（静止基线 vs 按住，取"静止=0 且按住稳定=1"的位）：返回 none。
+  3. `--hold-now`（按住全程稳定的位）：常量位淹没信号，无法区分。
+- **未开 Steam Input / DS4Windows** 的前提下仍失败。
+- **推测根因**：本机 DualSense 的实体按键可能不在 gamepad usage(0x05)/joystick
+  usage(0x04) 的这份报告里，而是走了另一个 HID 接口（如消费者控制 / vendor），
+  或被系统以非标准方式上报。需要专门的接口枚举才能确认。
+- **决策**：按 R9 不盲目硬试偏移（避免随机猜）。**暂不接入手柄**，主路径用键盘。
+
+### 待办（后续单独完善，互不影响）
+
+1. **手柄（DualSense）**
+   - 做一个 `--interfaces` 探测模式：枚举该设备的所有 HID 接口
+     （`MI_00..MI_03`），对每个接口尝试不同 UsagePage/Usage 注册，
+     定位实体按键所在的报告与偏移。
+   - 确认后：实现 `HidSource.start()`（Raw Input HID 消息循环），
+     在 `make_source` 打开 `enable_hid`，在配置页选 HID 绑定。
+   - 备选：若确认 Windows 只暴露触控/传感器接口，可考虑 `Windows.Gaming.Input`
+     或 `RawGameController`（UWP API）——但这会引入平台分支，需先评估。
+2. **方向盘 / 其他外设**
+   - 拿到设备后，复用同一 `--interfaces` 流程确认偏移；
+   - 通用绑定格式 `hid:VID:PID:byte:mask` 已支持任意 VID/PID，无需改架构。
+3. **绑定向导（可选）**
+   - 把 `tools/probe_dualsense.py` 的向导泛化为"任意设备按键扫描"，
+     配置页 `POST /api/bind` 已预留接口。
+4. **多输入源并存（可选）**
+   - 若需"键盘或手柄都能触发"，让 `voice_main` 同时启动多个来源，
+     事件合并到同一 `PTTController`；当前架构已支持（回调可多路）。
+
+### 相关文件
+- `input_sources.py`（核心，唯一需改）
+- `tools/probe_dualsense.py`（探测工具：`--scan` / `--diff-auto` /
+  `--hold-now` / `--wizard` / `--diff`）
+- `ptt_controller.py`（纯状态机，无需改）
+- `voice_main.py`（通过 `make_source` / 配置绑定，无需改）
+- `config_schema.py`：`PTT_MODE` / `PTT_BINDING` / `PTT_DOUBLE_TAP_WINDOW_MS`
