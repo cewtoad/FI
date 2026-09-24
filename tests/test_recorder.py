@@ -99,5 +99,8 @@ if __name__ == "__main__":
 
 # --- pytest entry point (T0: script-style -> pytest) ---
 
+import asyncio as _asyncio
+
+
 def test_main() -> None:
-    main()
+    _asyncio.run(main())

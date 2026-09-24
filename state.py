@@ -53,6 +53,7 @@ class TelemetryState:
 
         # Identity / session meta
         self.session_type: Optional[str] = None
+        self.session_kind: Optional[str] = None
         self.track_id: Optional[Any] = None
         self.total_laps: Optional[int] = None
         self.player_car_index: int = 0
@@ -94,12 +95,23 @@ class TelemetryState:
         self._participants: Dict[int, Dict[str, Any]] = {}   # car_idx -> info
         self._all_car_status: Optional[list] = None
         self.leaderboard: list = []
+        # T2.3: best valid lap time (ms) seen per car index. Approximate: the
+        # per-car validity flag is the current-lap flag, not a per-lap record,
+        # so this tracks the min of non-zero last-lap times only.
+        self._best_lap_by_car: Dict[int, int] = {}
 
         # Event tracking (position changes etc.) - fed to the AI as "what just
         # happened" so it can answer overtake questions with authority.
         self._last_position: Optional[int] = None
         self.events: list = []          # recent notable events, newest last
         self._event_seq: int = 0
+        self._event_session_time: Optional[float] = None
+        # T2.5: set by FLBK, consumed by the next LAP_DATA to roll back derived
+        # lap-based data (lap_records/best-lap/fuel trends/recommender).
+        self._pending_flashback: bool = False
+        # T4.1 (declared here so flashback reset is centralised): full per-lap
+        # snapshot samples, kept as a plain list for easy rewinding.
+        self.lap_snapshots: List[Dict[str, Any]] = []
 
         # Spectator mode: when spectating, the car we care about is the one
         # being watched (spectatorCarIndex), not playerCarIndex.
@@ -140,6 +152,8 @@ class TelemetryState:
     def _reset_for_new_session(self) -> None:
         self.latest.clear()
         self.packet_counts.clear()
+        self.session_type = None
+        self.session_kind = None
         self.lap_times_ms.clear()
         self.fuel_per_lap.clear()
         self.tyre_wear_per_lap.clear()
@@ -158,9 +172,13 @@ class TelemetryState:
         self._participants = {}
         self._all_car_status = None
         self.leaderboard = []
+        self._best_lap_by_car = {}
         self._last_position = None
         self.events = []
         self._event_seq = 0
+        self._event_session_time = None
+        self._pending_flashback = False
+        self.lap_snapshots = []
         self.is_spectating = False
         self.spectator_car_index = None
         self._pending_diff_event = None
@@ -192,6 +210,8 @@ class TelemetryState:
     def _dispatch(self, packet) -> None:
         header = packet.m_header
         self.note_header(header)
+        # T2.4: remember the session clock so events can carry a timestamp.
+        self._event_session_time = getattr(header, "m_sessionTime", None)
         # The "focus car" is the one we report on: normally the player's own
         # car, but in spectator mode it's the car being watched.
         self.player_car_index = self._resolve_focus_car(header)
@@ -220,6 +240,8 @@ class TelemetryState:
             self._on_participants(packet)
         elif pid == F1PacketType.EVENT:
             self._on_event(packet)
+        elif pid == F1PacketType.FINAL_CLASSIFICATION:
+            self._on_final_classification(packet)
 
     def _resolve_focus_car(self, header) -> int:
         """Choose which car index to report on.
@@ -252,17 +274,29 @@ class TelemetryState:
         self.spectator_car_index = sci if isinstance(sci, int) else None
 
         weather = packet.m_weather if hasattr(packet, "m_weather") else None
+        session_kind = self._session_kind(packet.m_sessionType)
+        self.session_kind = session_kind
         self.latest["session"] = {
             "session_type": str(packet.m_sessionType),
+            # T2.1: coarse kind for rule-set selection (practice/qualifying/
+            # race/time_trial); keeps the legacy string session_type intact.
+            "session_kind": session_kind,
             "track_id": str(packet.m_trackId),
             "track_length_m": getattr(packet, "m_trackLength", None),
             "total_laps": getattr(packet, "m_totalLaps", None),
             "session_time_left_s": getattr(packet, "m_sessionTimeLeft", None),
+            "session_duration_s": getattr(packet, "m_sessionDuration", None),
             "air_temp_c": getattr(packet, "m_airTemperature", None),
             "track_temp_c": getattr(packet, "m_trackTemperature", None),
             "rain_percentage": getattr(packet, "m_rainPercentage", None),
             "weather": str(weather) if weather is not None else None,
-            "safety_car_status": str(getattr(packet, "m_safetyCarStatus", "")),
+            "safety_car_status": self._safe_car_status(packet),
+            "forecast_accuracy": getattr(packet, "m_forecastAccuracy", None),
+            "weather_forecast": self._weather_forecast(packet),
+            "marshal_yellow_zones": self._yellow_zones(packet),
+            "pit_window_ideal_lap": getattr(packet, "m_pitStopWindowIdealLap", None),
+            "pit_window_latest_lap": getattr(packet, "m_pitStopWindowLatestLap", None),
+            "pit_window_rejoin_position": getattr(packet, "m_pitStopRejoinPosition", None),
             "sector2_start_m": getattr(packet, "m_sector2LapDistanceStart", None),
             "sector3_start_m": getattr(packet, "m_sector3LapDistanceStart", None),
             "is_spectating": self.is_spectating,
@@ -274,6 +308,81 @@ class TelemetryState:
                 self.fuel = FuelRateRecommender([], self.total_laps, self.MIN_FUEL_KG)
             else:
                 self.fuel.total_laps = self.total_laps
+
+    @staticmethod
+    def _session_kind(session_type) -> str:
+        """Map a SessionType enum to practice|qualifying|race|time_trial|unknown.
+
+        Uses the library's own predicates (never str()-compares the enum).
+        Sprint shootout rounds are already included in isQualiTypeSession()
+        (verified against lib/f1_types/common.py SessionType24).
+        """
+        try:
+            if session_type.isRaceTypeSession():
+                return "race"
+            if session_type.isQualiTypeSession():
+                return "qualifying"
+            if session_type.isFpTypeSession():
+                return "practice"
+            if session_type.isTimeTrialTypeSession():
+                return "time_trial"
+        except Exception:  # noqa: BLE001
+            pass
+        return "unknown"
+
+    @staticmethod
+    def _safe_car_status(packet) -> str:
+        """Readable safety-car status (T2.1). Falls back to the raw value."""
+        status = getattr(packet, "m_safetyCarStatus", None)
+        if status is None:
+            return ""
+        try:
+            return str(status)
+        except Exception:  # noqa: BLE001
+            return str(status)
+
+    @staticmethod
+    def _weather_forecast(packet) -> List[Dict[str, Any]]:
+        """Forecast samples as plain dicts, filtered to the session window (T2.1).
+
+        ``m_timeOffset`` is in minutes. For timed sessions we keep samples up to
+        the session duration; for lap-based sessions there is no per-lap offset
+        in the struct, so we keep the first hour (approx; documented limit).
+        """
+        samples = getattr(packet, "m_weatherForecastSamples", None) or []
+        duration_s = getattr(packet, "m_sessionDuration", 0) or 0
+        horizon_min = (duration_s // 60) if duration_s else 60
+        out = []
+        for s in samples:
+            t_off = getattr(s, "m_timeOffset", None)
+            if t_off is None:
+                continue
+            if horizon_min and t_off > horizon_min:
+                continue
+            weather = getattr(s, "m_weather", None)
+            out.append({
+                "time_offset_min": t_off,
+                "weather": str(weather) if weather is not None else None,
+                "rain_pct": getattr(s, "m_rainPercentage", None),
+            })
+        return out
+
+    @staticmethod
+    def _yellow_zones(packet) -> List[float]:
+        """Fraction (0..1) of lap where each yellow marshal zone starts (T2.1).
+
+        MarshalZoneFlagType: 3 = yellow (see packet_1_session_data.py).
+        """
+        zones = getattr(packet, "m_marshalZones", None) or []
+        out = []
+        for z in zones:
+            flag = getattr(z, "m_zoneFlag", None)
+            flag_val = getattr(flag, "value", flag)
+            if flag_val == 3:
+                start = getattr(z, "m_zoneStart", None)
+                if start is not None:
+                    out.append(start)
+        return out
 
     def _on_lap_data(self, packet) -> None:
         # Store the full 24-car field first (used by the leaderboard).
@@ -307,7 +416,19 @@ class TelemetryState:
             "driver_status": str(lap.m_driverStatus),
             "current_lap_invalid": bool(lap.m_currentLapInvalid),
             "num_pit_stops": lap.m_numPitStops,
+            # T2.2: penalties / warnings surfaced for the engineer.
+            "penalties_s": getattr(lap, "m_penalties", None),
+            "total_warnings": getattr(lap, "m_totalWarnings", None),
+            "corner_cutting_warnings": getattr(lap, "m_cornerCuttingWarnings", None),
+            "num_unserved_dt_pens": getattr(lap, "m_numUnservedDriveThroughPens", None),
+            "num_unserved_sg_pens": getattr(lap, "m_numUnservedStopGoPens", None),
         }
+
+        # T2.5: a FLBK was seen; the next LAP_DATA gives us the (rewound) lap
+        # number. Roll back all lap-derived data at/after it before continuing.
+        if self._pending_flashback:
+            self._pending_flashback = False
+            self._rollback_to_lap(cur_lap)
 
         # Feed the delta manager with distance/time samples on the current lap.
         self.delta.record_data_point(
@@ -362,8 +483,44 @@ class TelemetryState:
         wear_vals = [dmg.get(k) for k in
                      ("tyre_wear_fl", "tyre_wear_fr", "tyre_wear_rl", "tyre_wear_rr")]
         wear_vals = [v for v in wear_vals if isinstance(v, (int, float))]
-        if wear_vals:
-            self.tyre_wear_per_lap.push(max(wear_vals))
+        wear_max = max(wear_vals) if wear_vals else None
+        if wear_max is not None:
+            self.tyre_wear_per_lap.push(wear_max)
+
+        # T4.1: full per-lap snapshot for the race model / debrief (kept as a
+        # plain list so flashback rewinding is trivial).
+        self._record_lap_snapshot(completed_lap_num, last_lap_ms, valid,
+                                  fuel_this=fuel_this, wear_max=wear_max)
+
+    def _record_lap_snapshot(self, lap_num: int, lap_ms: int, valid: bool,
+                             fuel_this: Optional[float] = None,
+                             wear_max: Optional[float] = None) -> None:
+        """Append a complete per-lap sample (T4.1). Bounded to 100 entries."""
+        status = self.latest.get("status") or {}
+        lap = self.latest.get("lap") or {}
+        pos_ctx = self.latest.get("position_context") or {}
+        ahead = pos_ctx.get("ahead") or {}
+        behind = pos_ctx.get("behind") or {}
+        fuel_prev = self._fuel_at_lap_end.get(lap_num - 1)
+        burn = (fuel_prev - fuel_this) if (fuel_prev is not None and fuel_this is not None) else None
+        self.lap_snapshots.append({
+            "lap_num": lap_num,
+            "lap_time_ms": lap_ms,
+            "valid": valid,
+            "tyre_compound": status.get("tyre_compound_actual"),
+            "tyre_age_laps": status.get("tyres_age_laps"),
+            "tyre_wear_max_pct": wear_max,
+            "fuel_kg": fuel_this,
+            "fuel_burn_kg": round(burn, 3) if burn is not None and burn >= 0 else None,
+            "position": lap.get("car_position"),
+            "gap_ahead_ms": ahead.get("gap_ms"),
+            "ahead_index": (ahead.get("car_index") if ahead else None),
+            "gap_behind_ms": behind.get("gap_ms"),
+            "behind_index": (behind.get("car_index") if behind else None),
+            "safety_car": (self.latest.get("session") or {}).get("safety_car_status"),
+            "pit_this_lap": (lap.get("pit_status") not in (None, "NONE")),
+        })
+        self.lap_snapshots = self.lap_snapshots[-100:]
 
     def _on_car_telemetry(self, packet) -> None:
         car = self._player(packet.m_carTelemetryData)
@@ -571,6 +728,29 @@ class TelemetryState:
                 packet.m_rivalSessionBestDataSet, "m_lapTimeInMS", None),
         }
 
+    def _on_final_classification(self, packet) -> None:
+        """T2.6: store the final classification (also a debrief trigger)."""
+        rows = []
+        for idx, c in enumerate(packet.m_classificationData):
+            rows.append({
+                "position": c.m_position,
+                "car_index": idx,
+                "driver": self._driver_name(idx),
+                "num_laps": c.m_numLaps,
+                "grid_position": c.m_gridPosition,
+                "points": c.m_points,
+                "num_pit_stops": c.m_numPitStops,
+                "result_status": str(c.m_resultStatus),
+                "best_lap_ms": c.m_bestLapTimeInMS,
+                "total_race_time_s": c.m_totalRaceTime,
+                "penalties_time_s": c.m_penaltiesTime,
+                "num_penalties": c.m_numPenalties,
+                "num_tyre_stints": c.m_numTyreStints,
+                "is_player": idx == self.player_car_index,
+            })
+        rows.sort(key=lambda r: r["position"])
+        self.latest["final_classification"] = rows
+
     @staticmethod
     def _combine(ms_part: int, min_part: int) -> int:
         if not ms_part and not min_part:
@@ -580,17 +760,52 @@ class TelemetryState:
     # ----------------------------------------------------------------- events
 
     def _on_event(self, packet) -> None:
-        """Handle EVENT packets.
+        """Handle EVENT packets (T2.4: dispatch by event code).
 
-        Only OVERTAKE (OVTK) is consumed so far. It is the authoritative
-        source for "who overtook whom" (both vehicle indices come straight
-        from the game), so it takes priority over the leaderboard position
-        diff, which stays as a fallback for when no official event arrives.
+        OVERTAKE (OVTK) keeps its exact previous behaviour and text (the
+        authoritative "who overtook whom" source, preferred over the
+        leaderboard diff fallback). Every event now also carries
+        ``session_time`` (header) and ``lap_num`` for the timeline.
         """
         code = getattr(packet, "m_eventCode", None)
-        if code != PacketEventData.EventPacketType.OVERTAKE:
-            return
         details = getattr(packet, "mEventDetails", None)
+        EPT = PacketEventData.EventPacketType
+
+        if code == EPT.OVERTAKE:
+            self._on_event_overtake(details)
+        elif code == EPT.SAFETY_CAR:
+            self._on_event_safety_car(details)
+        elif code == EPT.RED_FLAG:
+            self._add_event("red_flag", None, None, "红旗出示")
+        elif code == EPT.PENALTY_ISSUED:
+            self._on_event_penalty(details)
+        elif code == EPT.FASTEST_LAP:
+            self._on_event_fastest_lap(details)
+        elif code == EPT.RETIREMENT:
+            self._on_event_retirement(details)
+        elif code == EPT.CHEQUERED_FLAG:
+            self._add_event("chequered", None, None, "方格旗，比赛结束")
+        elif code == EPT.LIGHTS_OUT:
+            self._add_event("lights_out", None, None, "起步！")
+        elif code == EPT.SESSION_STARTED:
+            self._add_event("session_started", None, None, "会话开始")
+        elif code == EPT.SESSION_ENDED:
+            self._add_event("session_ended", None, None, "会话结束")
+        elif code == EPT.DRIVE_THROUGH_SERVED:
+            self._on_event_dt_served(details)
+        elif code == EPT.STOP_GO_SERVED:
+            self._on_event_sg_served(details)
+        elif code == EPT.FLASHBACK:
+            self._on_event_flashback(details)
+        # else: unhandled event code - ignored (must never raise).
+
+    def _event_meta(self, packet) -> Dict[str, Any]:
+        header = getattr(packet, "m_header", None)
+        st = getattr(header, "m_sessionTime", None) if header is not None else None
+        lap = (self.latest.get("lap") or {}).get("current_lap_num")
+        return {"session_time": st, "lap_num": lap}
+
+    def _on_event_overtake(self, details) -> None:
         overtaker = getattr(details, "overtakingVehicleIdx", None)
         overtaken = getattr(details, "beingOvertakenVehicleIdx", None)
         if overtaker is None or overtaken is None:
@@ -610,26 +825,168 @@ class TelemetryState:
 
         # from/to carry the two vehicle indices for official overtake events
         # (for diff-derived events they carry positions).
+        self._add_event(kind, overtaker, overtaken, text)
+
+    def _on_event_safety_car(self, details) -> None:
+        sc_type = getattr(details, "m_safety_car_type", None)
+        ev_type = getattr(details, "m_event_type", None)
+        sc_val = getattr(sc_type, "value", sc_type)
+        ev_val = getattr(ev_type, "value", ev_type)
+        name = "安全车" if sc_val == 1 else ("虚拟安全车" if sc_val == 2 else "安全车")
+        if ev_val == 0:      # DEPLOYED
+            text = f"{name}出动"
+        elif ev_val == 1:    # RETURNING
+            text = f"{name}准备返回"
+        elif ev_val == 2:    # RETURNED
+            text = f"{name}结束"
+        elif ev_val == 3:    # RESUME_RACE
+            text = "比赛恢复"
+        else:
+            text = f"{name}状态更新"
+        self._add_event("safety_car", sc_val, ev_val, text,
+                        extra={"safety_car_type": sc_val, "event_type": ev_val})
+
+    def _on_event_penalty(self, details) -> None:
+        veh = getattr(details, "vehicleIdx", None)
+        ptype = getattr(details, "penaltyType", None)
+        ptype_val = getattr(ptype, "value", ptype)
+        ptime = getattr(details, "time", None)
+        who = self._driver_name(veh) if veh is not None else "?"
+        is_player = veh == self.player_car_index
+        text = f"{'你' if is_player else who}被罚时" + (f" {ptime}s" if ptime else "")
+        self._add_event("penalty", veh, ptype_val, text,
+                        extra={"vehicle_idx": veh, "penalty_type": ptype_val,
+                               "infringement_type": getattr(details, "infringementType", None),
+                               "penalty_time_s": ptime, "is_player": is_player})
+
+    def _on_event_fastest_lap(self, details) -> None:
+        veh = getattr(details, "vehicleIdx", None)
+        lap_time_s = getattr(details, "lapTime", None)
+        who = self._driver_name(veh) if veh is not None else "?"
+        is_player = veh == self.player_car_index
+        ms = int(lap_time_s * 1000) if isinstance(lap_time_s, (int, float)) else None
+        text = f"{'你' if is_player else who}刷出最快圈"
+        self._add_event("fastest_lap", veh, ms, text,
+                        extra={"vehicle_idx": veh, "lap_time_ms": ms,
+                               "is_player": is_player})
+
+    def _on_event_retirement(self, details) -> None:
+        veh = getattr(details, "vehicleIdx", None)
+        who = self._driver_name(veh) if veh is not None else "?"
+        is_player = veh == self.player_car_index
+        text = f"{'你' if is_player else who}退赛"
+        self._add_event("retirement", veh, None, text,
+                        extra={"vehicle_idx": veh, "is_player": is_player})
+
+    def _on_event_dt_served(self, details) -> None:
+        veh = getattr(details, "vehicleIdx", None)
+        self._add_event("penalty_served", veh, "DT", "通过处罚已执行",
+                        extra={"vehicle_idx": veh, "kind": "drive_through"})
+
+    def _on_event_sg_served(self, details) -> None:
+        veh = getattr(details, "vehicleIdx", None)
+        self._add_event("penalty_served", veh, "SG", "停走处罚已执行",
+                        extra={"vehicle_idx": veh, "kind": "stop_go"})
+
+    def _on_event_flashback(self, details) -> None:
+        """T2.5: mark a pending rollback; the lap number at this instant is not
+        trustworthy, so the actual truncation happens on the next LAP_DATA."""
+        self._pending_flashback = True
+        self._add_event("flashback", None, None, "回放（数据回滚）",
+                        extra={"flashback_time": getattr(details, "flashbackSessionTime", None)})
+
+    def _add_event(self, kind: str, frm: Any, to: Any, text: str,
+                   extra: Optional[Dict[str, Any]] = None) -> None:
+        """Append an event with the timeline fields, trimming to the last 20."""
         self._event_seq += 1
-        self.events.append({
+        ev: Dict[str, Any] = {
             "seq": self._event_seq,
             "kind": kind,
-            "from": overtaker,
-            "to": overtaken,
+            "from": frm,
+            "to": to,
             "text": text,
-        })
+            "session_time": self._event_session_time,
+            "lap_num": (self.latest.get("lap") or {}).get("current_lap_num"),
+        }
+        if extra:
+            ev.update(extra)
+        self.events.append(ev)
         self.events = self.events[-20:]
 
     def _arm_diff_dedup(self, direction: str) -> None:
         """Remember that an official player-involved overtake was just recorded,
         so the next matching leaderboard diff is not double-reported."""
         self._pending_diff_event = direction
-        self._pending_diff_until = time.monotonic() + self.OFFICIAL_EVENT_DEDUP_S
+        self._pending_diff_until = self._clock() + self.OFFICIAL_EVENT_DEDUP_S
 
     def _driver_name(self, idx: int) -> str:
         pinfo = self._participants.get(idx)
         name = (pinfo or {}).get("name")
         return name or f"car{idx}"
+
+    def _rollback_to_lap(self, current_lap: int) -> None:
+        """Rewind lap-derived data after a flashback (T2.5).
+
+        Everything derived from laps at or after ``current_lap`` is discarded:
+        lap_records, best-lap baseline, pace/fuel/wear trends, the fuel
+        recommender and the per-lap snapshots. ``current_lap`` is the lap the
+        car is on *after* the rewind.
+        """
+        # 1) lap_records (RollingHistory has no key delete -> rebuild).
+        kept = [r for r in self.lap_records.values()
+                if r.get("lap_num", 0) < current_lap]
+        self.lap_records.clear()
+        for r in kept:
+            self.lap_records.push(r)
+
+        # 2) best-lap baseline + pace trend from the surviving VALID laps.
+        valid_ms = [r["lap_time_ms"] for r in kept if r.get("valid")]
+        self.lap_times_ms.clear()
+        for ms in valid_ms:
+            self.lap_times_ms.push(ms)
+        if valid_ms:
+            self._best_lap_ms = min(valid_ms)
+            best_lap_num = next(r["lap_num"] for r in kept
+                                if r.get("valid") and r["lap_time_ms"] == self._best_lap_ms)
+            self.delta = LapDeltaManager()
+            self.delta.set_best_lap(best_lap_num)
+        else:
+            self._best_lap_ms = None
+            self.delta = LapDeltaManager()
+
+        # 3) fuel bookkeeping: drop readings for rewound laps and rebuild.
+        self._fuel_at_lap_end = {n: f for n, f in self._fuel_at_lap_end.items()
+                                 if n < current_lap}
+        self._fuel_recorded = {n for n in self._fuel_recorded if n < current_lap}
+        self._rebuild_fuel_recommender()
+
+        # 4) per-lap trend histories: recompute from the surviving snapshots.
+        self.lap_snapshots = [s for s in self.lap_snapshots
+                              if s.get("lap_num", 0) < current_lap]
+        self.fuel_per_lap.clear()
+        self.tyre_wear_per_lap.clear()
+        for s in self.lap_snapshots:
+            if s.get("fuel_burn_kg") is not None:
+                self.fuel_per_lap.push(s["fuel_burn_kg"])
+            if s.get("tyre_wear_max_pct") is not None:
+                self.tyre_wear_per_lap.push(s["tyre_wear_max_pct"])
+
+    def _rebuild_fuel_recommender(self) -> None:
+        """Rebuild FuelRateRecommender from the surviving end-of-lap readings.
+
+        The recommender cannot rewind itself, so after a flashback we throw it
+        away and replay the remaining laps into a fresh instance.
+        """
+        if not self._fuel_at_lap_end:
+            self.fuel = None
+            return
+        self.fuel = FuelRateRecommender([], self.total_laps or 1, self.MIN_FUEL_KG)
+        current = self._last_current_lap_num
+        for lap_num in sorted(self._fuel_at_lap_end):
+            if current is not None and lap_num >= current:
+                continue
+            self.fuel.add(self._fuel_at_lap_end[lap_num], lap_num, is_racing_lap=True)
+            self._fuel_recorded.add(lap_num)
 
     # ----------------------------------------------------------- leaderboard
 
@@ -667,6 +1024,13 @@ class TelemetryState:
                 continue
 
             pinfo = self._participants.get(idx, {})
+            last_lap = lap.m_lastLapTimeInMS
+            # T2.3: track the best (min) non-zero last-lap time per car.
+            if last_lap and last_lap > 0:
+                prev = self._best_lap_by_car.get(idx)
+                if prev is None or last_lap < prev:
+                    self._best_lap_by_car[idx] = last_lap
+            drv_status = getattr(lap, "m_driverStatus", None)
             row: Dict[str, Any] = {
                 "position": pos,
                 "car_index": idx,
@@ -680,8 +1044,12 @@ class TelemetryState:
                 "gap_to_front_ms": self._combine(
                     lap.m_deltaToCarInFrontInMS,
                     getattr(lap, "m_deltaToCarInFrontMinutes", 0)),
-                "last_lap_ms": lap.m_lastLapTimeInMS,
+                "last_lap_ms": last_lap,
+                "best_lap_ms": self._best_lap_by_car.get(idx),
                 "pit_status": str(lap.m_pitStatus),
+                "driver_status": str(drv_status) if drv_status is not None else None,
+                "lap_distance_m": getattr(lap, "m_lapDistance", None),
+                "penalties_s": getattr(lap, "m_penalties", None),
                 "tyre": None,
                 "tyre_age": None,
             }
@@ -725,6 +1093,7 @@ class TelemetryState:
         for r in rows:
             if r["position"] == target:
                 return {"driver": r["driver"], "position": r["position"],
+                        "car_index": r.get("car_index"),
                         "gap_ms": r["gap_to_front_ms"]}
         return None
 
@@ -737,7 +1106,7 @@ class TelemetryState:
             self._pending_diff_event = None
             self._pending_diff_until = 0.0
             direction = "up" if new_pos < old_pos else "down"
-            if direction == pending and time.monotonic() <= expiry:
+            if direction == pending and self._clock() <= expiry:
                 return  # duplicate of the official OVERTAKE event - skip
         self._record_position_event(old_pos, new_pos, rows)
 
@@ -754,16 +1123,7 @@ class TelemetryState:
             text = (f"你下降了 {new_pos - old_pos} 位到 P{new_pos}"
                     + (f"，被 {other['driver']} 超过" if other else ""))
             kind = "position_down"
-        self._event_seq += 1
-        self.events.append({
-            "seq": self._event_seq,
-            "kind": kind,
-            "from": old_pos,
-            "to": new_pos,
-            "text": text,
-        })
-        # Keep only the recent tail to bound memory / prompt size.
-        self.events = self.events[-20:]
+        self._add_event(kind, old_pos, new_pos, text)
 
     # -------------------------------------------------------------- snapshot
 
@@ -780,7 +1140,7 @@ class TelemetryState:
         Called from the receiver thread after each accepted packet; cheap when
         throttled (a couple of deep copies per second, not per packet).
         """
-        now = time.monotonic()
+        now = self._clock()
         if not force and not self._snap_dirty:
             return
         if not force and (now - self._frozen_at) < (1.0 / self.SNAPSHOT_HZ):
@@ -861,4 +1221,9 @@ class TelemetryState:
             "leaderboard": copy.deepcopy(self.leaderboard),
             "position_context": copy.deepcopy(self.latest.get("position_context")),
             "events": copy.deepcopy(self.events[-6:]),
+            # T2.6: final classification rows once the session ends.
+            "final_classification": copy.deepcopy(
+                self.latest.get("final_classification")),
+            # T4.1: full per-lap snapshots for the race model / debrief.
+            "lap_snapshots": copy.deepcopy(self.lap_snapshots),
         }

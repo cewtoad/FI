@@ -67,6 +67,7 @@ PACKETS_CONSUMED: Set[F1PacketType] = {
     F1PacketType.CAR_TELEMETRY_2,
     F1PacketType.SESSION_HISTORY,
     F1PacketType.TIME_TRIAL,
+    F1PacketType.FINAL_CLASSIFICATION,
 }
 
 
