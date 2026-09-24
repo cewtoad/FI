@@ -1,0 +1,264 @@
+"""Radio director: rule engine + gating + dedup/cooling (T5).
+
+``tick(snapshot, now)`` runs the rules against the current race model, filters
+by verbosity/quiet/cooldowns/per-lap cap/global min-gap, dedups by key, and
+emits Alerts to the configured sink (voice arbiter, web AlertLog, and the
+recorder). It NEVER calls an LLM.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Any, Callable, Dict, List, Optional
+
+from contracts import Alert, PRIORITY_P0, PRIORITY_P1
+import names as names_mod
+from radio_rules import Rule, RuleCtx
+
+_log = logging.getLogger("f1_tr.radio")
+
+_VERBOSITY_RANK = {"minimal": 0, "normal": 1, "chatty": 2}
+
+# Per-lap alert caps by verbosity.
+_PER_LAP_CAP = {"minimal": 1, "normal": 3, "chatty": 6}
+
+
+class RadioDirector:
+    def __init__(self, rules: List[Rule],
+                 alert_sink: Optional[Callable[[Alert], None]] = None,
+                 config: Any = None, clock=None,
+                 name_renderer: Optional[names_mod.NameRenderer] = None,
+                 logger: Optional[logging.Logger] = None) -> None:
+        import time as _time
+        self.rules = rules
+        self.sink = alert_sink
+        self._cfg = config
+        self._clock = clock or _time.monotonic
+        self._log = logger or _log
+        self.names = name_renderer
+        self._lock = threading.Lock()
+        self._last_fired: Dict[str, float] = {}
+        self._fired_keys: Dict[str, float] = {}     # dedup_key -> last time
+        self._last_event_seq = 0
+        self._alerts_this_lap = 0
+        self._lap_marker = None
+        self._last_alert_at = 0.0
+        self.total_alerts = 0
+        # Persist last RaceModelState between ticks (for transitions).
+        self._prev_model = None
+        # Quiet-mode runtime override (T5.8), in-memory only.
+        self._quiet_override: Optional[bool] = None
+
+    # ---------------------------------------------------------------- config
+
+    def _cfg_get(self, key, default):
+        if self._cfg is None:
+            return default
+        try:
+            return self._cfg.get(key, "") or default
+        except Exception:
+            return default
+
+    def _cfg_bool(self, key, default):
+        if self._cfg is None:
+            return default
+        try:
+            return self._cfg.get_bool(key, default)
+        except Exception:
+            return default
+
+    def _verbosity(self) -> str:
+        v = str(self._cfg_get("RADIO_VERBOSITY", "chatty")).lower()
+        return v if v in _VERBOSITY_RANK else "chatty"
+
+    def _enabled(self) -> bool:
+        return self._cfg_bool("RADIO_ENABLE", True)
+
+    def _quiet_active(self) -> bool:
+        policy = str(self._cfg_get("RADIO_QUIET_POLICY", "in_game")).lower()
+        if policy == "force_on":
+            return True
+        if policy == "force_off":
+            return False
+        return bool(self._quiet_override)
+
+    # ---------------------------------------------------------------- quiet
+
+    def set_quiet(self, on: bool) -> tuple:
+        """Toggle quiet mode at runtime. Returns (applied, message) (T5.8).
+
+        Only honoured when RADIO_QUIET_POLICY == in_game; locked otherwise.
+        """
+        policy = str(self._cfg_get("RADIO_QUIET_POLICY", "in_game")).lower()
+        if policy != "in_game":
+            return False, "quiet_locked"
+        self._quiet_override = bool(on)
+        return True, ("quiet_mode_on" if on else "quiet_mode_off")
+
+    def quiet_state(self) -> bool:
+        return self._quiet_active()
+
+    # ---------------------------------------------------------------- tick
+
+    def tick(self, snapshot: dict, now: float) -> int:
+        if not self._enabled():
+            self._remember(snapshot)
+            return 0
+        curr = self._race_model_from(snapshot)
+        prev = self._prev_model
+        new_events = self._new_events(snapshot)
+
+        # Allow P0 through even in quiet mode (safety). Everything else is off.
+        quiet = self._quiet_active()
+
+        ctx = RuleCtx(prev=prev, curr=curr, snapshot=snapshot,
+                      new_events=new_events, now=now,
+                      settings=self._cfg,
+                      names=self.names or names_mod.NameRenderer(
+                          str(self._cfg_get("DRIVER_NAME_STYLE", "zh"))))
+
+        emitted = 0
+        for rule in self.rules:
+            if rule.session_kinds and curr.session_kind not in rule.session_kinds:
+                continue
+            if not self._verbosity_allows(rule):
+                continue
+            if quiet and rule.priority != PRIORITY_P0:
+                continue
+            if not self._cooldown_ok(rule, now):
+                continue
+            try:
+                alert = rule.check(ctx)
+            except Exception as e:  # noqa: BLE001 - a bad rule must not stop radio
+                self._log.warning("rule %s failed: %r", rule.id, e)
+                continue
+            if alert is None:
+                continue
+            if not self._accept(alert, now):
+                continue
+            self._emit(alert)
+            emitted += 1
+
+        self._remember(snapshot)
+        return emitted
+
+    # ---------------------------------------------------------------- filters
+
+    def _verbosity_allows(self, rule: Rule) -> bool:
+        return _VERBOSITY_RANK[self._verbosity()] >= _VERBOSITY_RANK.get(rule.min_verbosity, 2)
+
+    def _cooldown_ok(self, rule: Rule, now: float) -> bool:
+        last = self._last_fired.get(rule.id)
+        return last is None or (now - last) >= rule.cooldown_s
+
+    def _accept(self, alert: Alert, now: float) -> bool:
+        # Dedup: same key not repeated within its rule cooldown.
+        key = alert.dedup_key or alert.id
+        last = self._fired_keys.get(key)
+        cooldown = self._rule_cooldown(alert.id)
+        if last is not None and (now - last) < cooldown:
+            return False
+        # Per-lap cap (non-P0 only).
+        lap = (self._snap_lap or {}).get("current_lap_num")
+        if lap != self._lap_marker:
+            self._lap_marker = lap
+            self._alerts_this_lap = 0
+        cap = _PER_LAP_CAP.get(self._verbosity(), 6)
+        if alert.priority != PRIORITY_P0 and self._alerts_this_lap >= cap:
+            return False
+        # Global min gap (non-P0).
+        min_gap = 8.0
+        if alert.priority != PRIORITY_P0:
+            try:
+                min_gap = float(self._cfg_get("RADIO_MIN_GAP_S", 8.0))
+            except Exception:
+                min_gap = 8.0
+            if (now - self._last_alert_at) < min_gap:
+                return False
+        self._last_fired[alert.id] = now
+        self._fired_keys[key] = now
+        self._alerts_this_lap += 1
+        self._last_alert_at = now
+        return True
+
+    def _rule_cooldown(self, rule_id: str) -> float:
+        for r in self.rules:
+            if r.id == rule_id:
+                return r.cooldown_s
+        return 15.0
+
+    def _emit(self, alert: Alert) -> None:
+        self.total_alerts += 1
+        if self.sink is not None:
+            try:
+                self.sink(alert)
+            except Exception as e:  # noqa: BLE001
+                self._log.warning("alert sink failed: %r", e)
+
+    # ---------------------------------------------------------------- helpers
+
+    def _remember(self, snapshot: dict) -> None:
+        self._prev_model = self._race_model_from(snapshot)
+        events = snapshot.get("events") or []
+        if events:
+            self._last_event_seq = max(e.get("seq", 0) for e in events)
+        self._snap_lap = (snapshot.get("latest", {}) or {}).get("lap", {}) or {}
+
+    _snap_lap: dict = {}
+
+    def _new_events(self, snapshot: dict) -> List[dict]:
+        events = snapshot.get("events") or []
+        return [e for e in events if e.get("seq", 0) > self._last_event_seq]
+
+    def _race_model_from(self, snapshot: dict):
+        rm = snapshot.get("race_model")
+        if not rm:
+            return _EmptyModel()
+        return _DictModel(rm)
+
+    def stats(self) -> dict:
+        return {"alerts": self.total_alerts, "quiet": self._quiet_active(),
+                "verbosity": self._verbosity()}
+
+
+class _EmptyModel:
+    session_kind = "unknown"
+    stint = None
+    ahead = None
+    behind = None
+    pit_window = None
+    tyre_laps_to_limit = None
+    fuel_laps_left = None
+    rain_eta_min = None
+    field_best_lap_ms = None
+    pole_lap_ms = None
+    upto_lap = 0
+    flags: dict = {}
+
+
+class _DictModel:
+    """Adapt the snapshot's race_model dict to the attribute access rules use."""
+
+    def __init__(self, d: dict) -> None:
+        self._d = d or {}
+
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        v = self._d.get(name)
+        return _obj(v) if v is not None else None
+
+    @property
+    def session_kind(self):
+        return self._d.get("session_kind", "unknown")
+
+    @property
+    def flags(self):
+        return self._d.get("flags") or {}
+
+
+def _obj(v):
+    if isinstance(v, dict):
+        return _DictModel(v)
+    return v
