@@ -41,7 +41,7 @@ async def main():
                                  lap_ms if lap_no == 2 else 0, cur, dist,
                                  (lap_no - 1) * 5000 + dist, lap_no, 5, 0), (HOST, PORT))
             sock.sendto(make_telemetry(PACKET_FORMAT, uid, frame, t,
-                                       295, 8, 1.0, 0.0, 100), (HOST, PORT))
+                                       295, 8, 1.0, 0.0, 115), (HOST, PORT))
             sock.sendto(make_status(PACKET_FORMAT, uid, frame, t,
                                     90.0 - lap_no, 4.0 - lap_no * 0.1, lap_no), (HOST, PORT))
             frame += 1

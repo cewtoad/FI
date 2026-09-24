@@ -142,10 +142,12 @@ def make_telemetry(packet_format: int, session_uid: int, frame: int, session_tim
             tyres_surface_temperature_1=tyre_surface if i == PLAYER else 40,
             tyres_surface_temperature_2=tyre_surface if i == PLAYER else 40,
             tyres_surface_temperature_3=tyre_surface if i == PLAYER else 40,
-            tyres_inner_temperature_0=100,
-            tyres_inner_temperature_1=100,
-            tyres_inner_temperature_2=100,
-            tyres_inner_temperature_3=100,
+            # Inner temp tracks the surface so T1.3's inner-median tyre check
+            # can be exercised end-to-end (was hard-coded 100).
+            tyres_inner_temperature_0=tyre_surface if i == PLAYER else 85,
+            tyres_inner_temperature_1=tyre_surface if i == PLAYER else 85,
+            tyres_inner_temperature_2=tyre_surface if i == PLAYER else 85,
+            tyres_inner_temperature_3=tyre_surface if i == PLAYER else 85,
             engine_temperature=105,
             tyres_pressure_0=22.5,
             tyres_pressure_1=22.5,
