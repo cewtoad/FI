@@ -51,6 +51,12 @@ function Build-Core {
     py -3.12 build_manifest.py hidden-imports | ForEach-Object {
         $hidden += "--hidden-import"; $hidden += $_
     }
+    # T10a: ship read-only resources (data/) into _internal so
+    # paths.resource_root() finds them in the frozen build.
+    $addData = @()
+    if (Test-Path (Join-Path $root "data")) {
+        $addData += "--add-data"; $addData += "data;data"
+    }
     # T10a: sounddevice + numpy are NO LONGER excluded - the core pack shares
     # one audio code path with the full pack (voice mode works there too).
     py -3.12 -m PyInstaller `
@@ -62,6 +68,7 @@ function Build-Core {
         --exclude-module matplotlib `
         --exclude-module faster_whisper `
         --exclude-module ctranslate2 `
+        @addData `
         @hidden `
         --distpath $dist --workpath $work `
         FI.py
@@ -72,8 +79,9 @@ function Build-Core {
     Copy-Item (Join-Path $root ".env.example") (Join-Path $exeDir ".env.example") -Force
     $zip = Join-Path $dist "F1Engineer-core-$Version-win64.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    # T10a: use zipfile via Python (Compress-Archive OOMs on big trees).
-    py -3.12 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_DEFLATED); import os; [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f), os.path.dirname(os.path.dirname(sys.argv[1])))) for r,_,fs in os.walk(sys.argv[2]) for f in fs]; z.close()" $zip $exeDir
+    # T10a: zip via tools/make_zip.py (Compress-Archive OOMs on big trees);
+    # arcnames are relative to the stage's parent -> a single F1Engineer/ folder.
+    py -3.12 (Join-Path $root "tools\make_zip.py") $zip $exeDir
     Write-Host "-> $zip" -ForegroundColor Green
     Get-FileHash $zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $(Split-Path $zip -Leaf)" } |
         Add-Content (Join-Path $dist "SHA256SUMS.txt")
