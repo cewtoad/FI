@@ -76,6 +76,20 @@ def _route_lap(facts, q):
     return f"第 {lap} 圈"
 
 
+def _route_laps_remaining(facts, q):
+    """Answer "how many laps left" (distinct from "which lap am I on")."""
+    remaining = facts.get("laps_remaining")
+    if isinstance(remaining, int):
+        if remaining <= 0:
+            return "比赛已到最后阶段"
+        return f"还剩 {remaining} 圈(含本圈)"
+    # Quali / practice have no lap count: report the session clock instead.
+    left = facts.get("session_time_left_s")
+    if isinstance(left, (int, float)) and left > 0:
+        return f"本阶段还剩 {int(left) // 60} 分 {int(left) % 60} 秒"
+    return None
+
+
 def _route_last_lap(facts, q):
     t = _fmt_fact(facts, "last_lap_time")
     return f"上一圈 {t}" if t else None
@@ -88,7 +102,11 @@ def _route_best_lap(facts, q):
 
 def _route_gap_ahead(facts, q):
     g = _fmt_fact(facts, "gap_to_front")
-    if not g or g == "领跑":
+    if not g:
+        # T1.2: no front-gap data (e.g. leader) must not be reported as
+        # "你在领跑" - only an explicit "领跑" fact says that.
+        return None
+    if g == "领跑":
         return "你在领跑"
     return f"距前车 {g}"
 
@@ -159,7 +177,10 @@ _ROUTES: List[tuple] = [
     (re.compile(r"距.*前车|差.*前车|和前车"), _route_gap_ahead, "gap_ahead"),
     (re.compile(r"最快圈|最好.*圈|best"), _route_best_lap, "best_lap"),
     (re.compile(r"上[一]?圈|上一圈速度"), _route_last_lap, "last_lap"),
-    (re.compile(r"第几圈|还剩几圈|还剩多少圈|圈数"), _route_lap, "lap"),
+    # "还剩几圈" must be tested before the generic lap-count route.
+    (re.compile(r"还剩几圈|还剩多少圈|还有几圈|剩几圈|剩余圈数"),
+     _route_laps_remaining, "laps_remaining"),
+    (re.compile(r"第几圈|圈数"), _route_lap, "lap"),
     (re.compile(r"我.*p几|我.*第几|什么名次|排名|位置"), _route_position, "position"),
     (re.compile(r"油|燃油|油耗"), _route_fuel, "fuel"),
     (re.compile(r"胎温|轮胎温度"), _route_tyre_temp, "tyre_temp"),

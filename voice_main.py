@@ -155,18 +155,17 @@ class VoiceApp:
                 return
             print(f"[voice] 你说: 「{question}」", flush=True)
 
-            # Engineer with the live snapshot
+            # Engineer with the live snapshot. T1.1: always go through ask()
+            # so the local fast path (position/lap/tyre/...) works without a
+            # key; ask() itself handles the unconfigured case.
             snap = self.state.snapshot()
-            if not self.engineer.configured:
-                answer = "（未配置 AI key）"
-            else:
-                t1 = time.time()
-                answer = self.engineer.ask(question, snap)
-                ai_dt = time.time() - t1
-                usage = self.engineer.last_usage or {}
-                print(f"[voice] AI 推理耗时 {ai_dt:.2f}s "
-                      f"(来源={self.engineer.last_source}, "
-                      f"tokens={usage.get('total_tokens')})", flush=True)
+            t1 = time.time()
+            answer = self.engineer.ask(question, snap, channel="voice")
+            ai_dt = time.time() - t1
+            usage = self.engineer.last_usage or {}
+            print(f"[voice] AI 推理耗时 {ai_dt:.2f}s "
+                  f"(来源={self.engineer.last_source}, "
+                  f"tokens={usage.get('total_tokens')})", flush=True)
             print(f"[voice] AI: {answer}", flush=True)
 
             # TTS

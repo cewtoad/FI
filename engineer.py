@@ -22,11 +22,25 @@ from summariser import Summariser
 
 # Shown when a question needs the LLM but no key is configured. Kept
 # actionable: it names the fix and lists what still works without a key.
+# T1.1: the web and voice channels point at the right place to set the key
+# (web UI settings panel vs the standalone config page).
 UNCONFIGURED_HINT = (
     "这个问题需要 AI,但你还没配置 key。"
     "点右上角【设置】填入 LLM_API_KEY 即可(或问本地能答的:"
     "名次 / 圈数 / 圈速 / 油量 / 胎温 / 轮胎 / 损伤 / 前车差距 / 进站)。"
 )
+UNCONFIGURED_HINT_VOICE = (
+    "这个问题需要 AI,但你还没配置 key。"
+    "运行 py -3.12 FI.py --config 填入 LLM_API_KEY 即可"
+    "(或问本地能答的:名次 / 圈数 / 圈速 / 油量 / 胎温 / 轮胎 / 损伤 / 前车差距 / 进站)。"
+)
+
+
+def unconfigured_hint(channel: str) -> str:
+    """Pick the no-key hint that matches the caller's channel."""
+    if (channel or "").strip().lower() == "voice":
+        return UNCONFIGURED_HINT_VOICE
+    return UNCONFIGURED_HINT
 
 
 class Engineer:
@@ -90,11 +104,15 @@ class Engineer:
         """Signal an in-flight ask to abandon its result."""
         self._cancel.set()
 
-    def ask(self, question: str, snapshot: Dict[str, Any]) -> str:
+    def ask(self, question: str, snapshot: Dict[str, Any],
+            channel: str = "web") -> str:
         """Answer a question against a raw snapshot.
 
         Fast path: the local router answers deterministic questions directly.
         Otherwise the LLM is used with the active profile.
+
+        ``channel`` only affects the no-key hint wording (web vs voice); the
+        local fast path always runs first, regardless of key.
         """
         self.last_error = None
         self._cancel.clear()
@@ -116,7 +134,7 @@ class Engineer:
         if client is None or not client.configured:
             self.last_error = "LLM 未配置 (LLM_API_KEY / DEEPSEEK_API_KEY)"
             self.last_source = "no-key"
-            return UNCONFIGURED_HINT
+            return unconfigured_hint(channel)
 
         messages = build_messages(question, summary, self.history, profile)
         try:

@@ -14,9 +14,11 @@ No config, no IPC, no async event bus, no network. Plain CPU-bound aggregation.
 from __future__ import annotations
 
 import copy
+import statistics
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Callable, Dict, List, Optional
 
 from lib.delta import LapDeltaManager
 from lib.f1_types import (F1PacketType, F1Utils, LapHistoryData,
@@ -28,17 +30,24 @@ from lib.rolling_history import RollingHistory
 class TelemetryState:
     """Aggregates parsed packets for the player car into a queryable snapshot."""
 
-    # How many laps of history to keep for trend answers.
-    HISTORY_LAPS = 20
+    # How many laps of history to keep for trend answers. T1.4: raised from 20
+    # to 100 (a full race is up to ~70 laps; memory is trivial).
+    HISTORY_LAPS = 100
     # Minimum fuel required to finish (safety margin, kg). Adjust later via config.
     MIN_FUEL_KG = 1.5
     # After a player-involved official OVERTAKE event, a leaderboard position
     # diff in the same direction within this window is treated as the same
     # overtake (already reported) and not recorded again.
     OFFICIAL_EVENT_DEDUP_S = 8.0
+    # T1.3: window (seconds) over which the tyre inner-temperature median is
+    # taken. A brake-zone spike is short; the median filters it out.
+    TYRE_TEMP_MEDIAN_WINDOW_S = 3.0
 
-    def __init__(self, error_logger: Optional[Any] = None) -> None:
+    def __init__(self, error_logger: Optional[Any] = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._error_logger = error_logger
+        # Injectable monotonic clock (R5): tests drive time deterministically.
+        self._clock = clock
         self.session_uid: Optional[int] = None
         self.session_started: bool = False
 
@@ -52,6 +61,8 @@ class TelemetryState:
         self.latest: Dict[str, Any] = {}
         self.packet_counts: Dict[str, int] = {}
         self.packet_errors: Dict[str, int] = {}
+        # T1.3: rolling (ts, inner_temp_c list) samples for the tyre median.
+        self._tyre_inner_samples: deque = deque()
 
         # Trend histories (per-lap samples)
         self.lap_times_ms: RollingHistory = RollingHistory(self.HISTORY_LAPS)
@@ -143,6 +154,7 @@ class TelemetryState:
         self._fuel_recorded = set()
         self._fuel_lap_num = None
         self._all_lap_data = None
+        self._tyre_inner_samples = deque()
         self._participants = {}
         self._all_car_status = None
         self.leaderboard = []
@@ -329,7 +341,29 @@ class TelemetryState:
                     self._best_lap_ms = last_lap_ms
                     # best lap reference is the lap that just ended
                     self.delta.set_best_lap(completed_lap_num)
-        # Fuel for the finished lap is ingested lazily from car-status samples.
+
+        # T1.4: record per-lap fuel burn and max tyre wear. Previously both
+        # RollingHistories were declared but never pushed, so the wear/fuel
+        # trends simply did not exist.
+        #
+        # Fuel: end-of-lap fuel is sampled in _on_car_status into
+        # _fuel_at_lap_end keyed by lap number. This lap's burn is the drop
+        # from the previous lap's end value.
+        fuel_this = self._fuel_at_lap_end.get(completed_lap_num)
+        fuel_prev = self._fuel_at_lap_end.get(completed_lap_num - 1)
+        if fuel_this is not None and fuel_prev is not None:
+            burned = fuel_prev - fuel_this
+            if burned >= 0:
+                self.fuel_per_lap.push(round(burned, 3))
+
+        # Tyre wear: the max of the four wheels' wear as last seen. The damage
+        # packet is the only source; skip when no damage packet has arrived yet.
+        dmg = self.latest.get("damage") or {}
+        wear_vals = [dmg.get(k) for k in
+                     ("tyre_wear_fl", "tyre_wear_fr", "tyre_wear_rl", "tyre_wear_rr")]
+        wear_vals = [v for v in wear_vals if isinstance(v, (int, float))]
+        if wear_vals:
+            self.tyre_wear_per_lap.push(max(wear_vals))
 
     def _on_car_telemetry(self, packet) -> None:
         car = self._player(packet.m_carTelemetryData)
@@ -348,6 +382,33 @@ class TelemetryState:
             "tyres_pressure_psi": list(car.m_tyresPressure),
             "engine_temp_c": car.m_engineTemperature,
         }
+        # T1.3: sample inner temps for the ~3s median used by the tyre notes.
+        inner = list(car.m_tyresInnerTemperature)
+        if inner:
+            self._tyre_inner_samples.append((self._clock(), inner))
+            cutoff = self._clock() - self.TYRE_TEMP_MEDIAN_WINDOW_S
+            while self._tyre_inner_samples and self._tyre_inner_samples[0][0] < cutoff:
+                self._tyre_inner_samples.popleft()
+
+    def tyre_inner_temp_median_c(self) -> Optional[List[float]]:
+        """Median inner temperature per wheel over the last ~3s (T1.3).
+
+        Returns ``[FL, FR, RL, RR]`` (rounded) or None when no samples exist.
+        A rolling median suppresses short brake-zone spikes that made the
+        instantaneous surface-temperature check misfire.
+        """
+        if not self._tyre_inner_samples:
+            return None
+        cutoff = self._clock() - self.TYRE_TEMP_MEDIAN_WINDOW_S
+        recent = [s for ts, s in self._tyre_inner_samples if ts >= cutoff]
+        if not recent:
+            recent = [self._tyre_inner_samples[-1][1]]
+        wheels = len(recent[0])
+        out = []
+        for w in range(wheels):
+            col = [s[w] for s in recent if w < len(s)]
+            out.append(round(statistics.median(col), 1) if col else None)
+        return out
 
     def _on_car_status(self, packet) -> None:
         st = self._player(packet.m_carStatusData)
@@ -762,6 +823,12 @@ class TelemetryState:
                 "data_sufficient": self.fuel.isDataSufficient(),
             }
 
+        latest = copy.deepcopy(self.latest)
+        # T1.3: attach the smoothed inner-tyre median next to the raw car data.
+        car = latest.get("car")
+        if isinstance(car, dict):
+            car["tyres_inner_temp_median_c"] = self.tyre_inner_temp_median_c()
+
         return {
             "session": {
                 "session_uid": self.session_uid,
@@ -772,7 +839,7 @@ class TelemetryState:
             },
             # Deep copies: consumers must never hold a live reference into the
             # mutating state (the old snapshot() exposed self.latest directly).
-            "latest": copy.deepcopy(self.latest),
+            "latest": latest,
             "delta": None if delta is None else {
                 "delta_ms": delta.delta_ms,
                 "best_lap_num": delta.best_lap_num,
@@ -785,6 +852,9 @@ class TelemetryState:
                 # All completed laps incl. invalid ones (each {lap_num,
                 # lap_time_ms, valid}); lap_times_ms above is valid-only.
                 "lap_records": list(self.lap_records.values()),
+                # T1.4: per-lap fuel burn (kg) and max tyre wear (%), newest last.
+                "fuel_per_lap_kg": list(self.fuel_per_lap.values()),
+                "tyre_wear_per_lap_pct": list(self.tyre_wear_per_lap.values()),
             },
             "packet_counts": dict(self.packet_counts),
             "packet_errors": dict(self.packet_errors),

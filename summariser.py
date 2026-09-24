@@ -54,10 +54,34 @@ def _fmt_gap_signed(ms: Optional[int]) -> str:
 class Summariser:
     """Derives facts and notes from a snapshot dict."""
 
-    # Tunable thresholds (move to config later).
+    # Tunable thresholds (T1.3: tyre threshold now read from config so it can
+    # be calibrated against replay data without a code change).
     HOT_TYRE_C = 110
     RISING_TYRE_C = 6      # delta across recent laps considered "rising"
     FUEL_DEFICIT_LAPS = -0.2
+
+    def __init__(self, config: Any = None) -> None:
+        if config is None:
+            try:
+                from config import get_config
+                config = get_config()
+            except Exception:  # noqa: BLE001 - summariser must never hard-fail
+                config = None
+        self._cfg = config
+
+    @property
+    def hot_tyre_c(self) -> float:
+        """Inner-tyre "too hot" threshold (default 110C; PLACEHOLDER, T1.3).
+
+        NOTE: this default has NOT been calibrated against real replay data
+        (see PLAN v2 stop point #6). Calibrate before trusting the warning.
+        """
+        if self._cfg is None:
+            return self.HOT_TYRE_C
+        try:
+            return self._cfg.get_float("TYRE_HOT_INNER_C", self.HOT_TYRE_C)
+        except Exception:  # noqa: BLE001
+            return self.HOT_TYRE_C
 
     def summarise(self, snap: Dict[str, Any]) -> Dict[str, Any]:
         latest = snap.get("latest", {})
@@ -70,8 +94,12 @@ class Summariser:
         trends = snap.get("trends", {})
 
         pos = lap.get("car_position")
+        current_lap = lap.get("current_lap_num")
+        session = snap.get("session", {})
+        total_laps = session.get("total_laps")
         facts: Dict[str, Any] = {
-            "lap": lap.get("current_lap_num"),
+            "lap": current_lap,
+            "total_laps": total_laps,
             "position": pos,
             "current_lap_time": _fmt_ms(lap.get("current_lap_time_ms")),
             "last_lap_time": _fmt_ms(lap.get("last_lap_time_ms")),
@@ -82,6 +110,7 @@ class Summariser:
             "sector3": _fmt_ms(lap.get("sector3_ms")),
             "gap_to_front": "领跑" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_car_in_front_ms")),
             "gap_to_leader": "领先全场" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_race_leader_ms")),
+            "session_time_left_s": session.get("session_time_left_s"),
             "speed_kph": car.get("speed_kph"),
             "gear": car.get("gear"),
             "tyre_compound": status.get("tyre_compound_actual"),
@@ -90,8 +119,19 @@ class Summariser:
             "fuel_kg": status.get("fuel_in_tank_kg"),
             "fuel_laps_left": status.get("fuel_remaining_laps"),
             "ers_energy_j": status.get("ers_store_energy_j"),
-            "drs_allowed": status.get("drs_allowed"),
         }
+        # T1.5: under 2026 regulations DRS is replaced by Active Aero / Overtake
+        # mode, so never surface a DRS state there (it would be misleading).
+        regs_2026 = bool(car2.get("regulations_2026"))
+        if not regs_2026:
+            facts["drs_allowed"] = status.get("drs_allowed")
+
+        # Laps remaining (T1.2): only meaningful when the session has a lap
+        # count. Includes the lap being driven (standard race-engineer usage:
+        # "5 laps to go" while on lap N of M means M-N+1).
+        if isinstance(total_laps, int) and total_laps > 0 \
+                and isinstance(current_lap, int) and current_lap > 0:
+            facts["laps_remaining"] = max(0, total_laps - current_lap + 1)
 
         if fuel:
             facts["fuel_surplus_laps"] = fuel.get("surplus_laps")
@@ -108,7 +148,7 @@ class Summariser:
         if damage:
             if damage.get("has_significant_damage"):
                 facts["damage_bodywork_max_pct"] = damage.get("worst_bodywork")
-            if damage.get("drs_fault"):
+            if not regs_2026 and damage.get("drs_fault"):
                 facts["drs_fault"] = True
             if damage.get("engine_blown") or damage.get("engine_seized"):
                 facts["engine_critical"] = True
@@ -144,7 +184,7 @@ class Summariser:
         notes.extend(self._session_notes(latest))
         notes.extend(self._aero_notes(car2))
         notes.extend(self._battle_notes(pos, ahead, behind))
-        notes.extend(self._damage_notes(damage))
+        notes.extend(self._damage_notes(damage, regs_2026))
         notes.extend(self._pit_notes(lap, status))
 
         # Recent position-change events (authoritative "what just happened").
@@ -175,12 +215,16 @@ class Summariser:
 
     def _tyre_notes(self, car, status) -> List[str]:
         out: List[str] = []
-        temps = car.get("tyres_surface_temp_c") or []
+        # T1.3: use the ~3s median inner temperature, not the instantaneous
+        # surface temperature (which spikes in every brake zone and caused
+        # false "tyre overheating" alarms).
+        temps = car.get("tyres_inner_temp_median_c")
+        hot_c = self.hot_tyre_c
         if temps:
-            hot = [i for i, t in enumerate(temps) if t and t >= self.HOT_TYRE_C]
+            hot = [i for i, t in enumerate(temps) if t and t >= hot_c]
             if hot:
                 pos = ",".join("FL FR RL RR".split()[i] for i in hot)
-                out.append(f"胎温过高: {pos} 超过 {self.HOT_TYRE_C}C (当前 {temps})")
+                out.append(f"胎温过高: {pos} 内温中位超过 {hot_c:g}C (当前 {temps})")
         age = status.get("tyres_age_laps")
         if isinstance(age, int) and age >= 15:
             out.append(f"轮胎已使用 {age} 圈，接近衰退区间")
@@ -240,7 +284,7 @@ class Summariser:
             out.append(f"后车 {behind['driver']} (P{behind['position']})")
         return out
 
-    def _damage_notes(self, damage) -> List[str]:
+    def _damage_notes(self, damage, regs_2026: bool = False) -> List[str]:
         out: List[str] = []
         if not damage:
             return out
@@ -248,7 +292,9 @@ class Summariser:
             out.append("警告: 引擎已损毁")
         if damage.get("engine_seized"):
             out.append("警告: 引擎过热抱死")
-        if damage.get("drs_fault"):
+        # T1.5: DRS does not exist under 2026 regs; the equivalent system is
+        # Active Aero / Overtake, so suppress the DRS fault wording there.
+        if damage.get("drs_fault") and not regs_2026:
             out.append("DRS 系统故障")
         if damage.get("ers_fault"):
             out.append("ERS 故障")

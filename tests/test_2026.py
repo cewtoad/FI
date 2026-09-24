@@ -113,3 +113,34 @@ def test_main() -> None:
     result = main()
     if _inspect.isawaitable(result):
         _asyncio.run(result)
+
+
+# --- T1.5: 2026 regs hide DRS in the summary ---
+
+def _snap_2026(regs: bool, drs_fault: bool = False, drs_allowed: int = 1) -> dict:
+    return {
+        "latest": {
+            "car": {},
+            "car2": {"regulations_2026": regs, "overtake_available": True},
+            "status": {"drs_allowed": drs_allowed},
+            "damage": {"drs_fault": drs_fault},
+        },
+        "session": {}, "delta": {}, "fuel": {}, "trends": {},
+        "leaderboard": [], "events": [],
+    }
+
+
+def test_2026_hides_drs_facts_and_notes():
+    s = Summariser(config=None).summarise(_snap_2026(regs=True, drs_fault=True))
+    assert "drs_allowed" not in s["facts"]
+    assert "drs_fault" not in s["facts"]
+    assert not any("DRS" in n for n in s["notes"]), s["notes"]
+    # Overtake is still surfaced as the 2026 equivalent.
+    assert s["facts"].get("overtake_available") is True
+
+
+def test_pre_2026_keeps_drs_facts():
+    s = Summariser(config=None).summarise(_snap_2026(regs=False, drs_fault=True))
+    assert s["facts"].get("drs_allowed") == 1
+    assert s["facts"].get("drs_fault") is True
+    assert any("DRS" in n for n in s["notes"]), s["notes"]

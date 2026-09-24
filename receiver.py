@@ -81,12 +81,15 @@ class TelemetryReceiver:
         interested: Optional[Set[F1PacketType]] = None,
         logger: Optional[logging.Logger] = None,
         on_packet: Optional[Callable[[object], None]] = None,
+        raw_sink: Optional[Callable[[bytes], None]] = None,
     ) -> None:
         self.state = state
         self.port = port
         self.bind_ip = bind_ip
         self.logger = logger or logging.getLogger("f1_tr.receiver")
         self.on_packet = on_packet
+        # T1.6: optional raw-bytes sink (recording) called before parsing.
+        self.raw_sink = raw_sink
 
         self.factory = PacketParserFactory(
             interested or PACKETS_ALL, self.logger
@@ -115,6 +118,14 @@ class TelemetryReceiver:
             raise
 
     def _handle_raw(self, raw_packet: bytes) -> None:
+        # T1.6: record the raw datagram (pre-parse) when a sink is attached.
+        # A sink failure must never disturb the receive path.
+        if self.raw_sink is not None:
+            try:
+                self.raw_sink(raw_packet)
+            except Exception as e:  # noqa: BLE001
+                self.raw_sink_errors = getattr(self, "raw_sink_errors", 0) + 1
+                self.logger.warning("raw_sink failed: %r", e)
         # The factory raises (instead of returning None) for a few hard guards
         # such as unsupported packet formats. One malformed / old-format
         # packet must never kill the receive loop, so catch everything here,
