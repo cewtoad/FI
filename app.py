@@ -216,8 +216,16 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
             race_model.update(snapshot, now)
         if app.radio is not None:
             app.radio.tick(snapshot, now)
+        if app.extras.get("debrief") is not None:
+            app.extras["debrief"](snapshot, now)
 
     ticker.add(_tick, "pipeline")
+    # T8: end-of-session debrief writer (local TXT, no LLM).
+    try:
+        from debrief import DebriefWriter
+        app.extras["debrief"] = DebriefWriter(config=get_config(), logger=logger)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("debrief writer unavailable: %r", e)
     app.ticker = ticker
 
 
