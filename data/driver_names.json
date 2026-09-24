@@ -1,0 +1,27 @@
+{
+  "drivers": [
+    {"code": "VERSTAPPEN", "zh": "维斯塔潘", "num": 1},
+    {"code": "NORRIS", "zh": "诺里斯", "num": 4},
+    {"code": "LECLERC", "zh": "勒克莱尔", "num": 16},
+    {"code": "HAMILTON", "zh": "汉密尔顿", "num": 44},
+    {"code": "RUSSELL", "zh": "拉塞尔", "num": 63},
+    {"code": "PIASTRI", "zh": "皮亚斯特里", "num": 81},
+    {"code": "ALONSO", "zh": "阿隆索", "num": 14},
+    {"code": "SAINZ", "zh": "塞恩斯", "num": 55},
+    {"code": "STROLL", "zh": "斯特罗尔", "num": 18},
+    {"code": "GASLY", "zh": "加斯利", "num": 10},
+    {"code": "OCON", "zh": "奥康", "num": 31},
+    {"code": "ALBON", "zh": "阿尔本", "num": 23},
+    {"code": "HULKENBERG", "zh": "霍肯伯格", "num": 27},
+    {"code": "TSUNODA", "zh": "角田", "num": 22},
+    {"code": "LAWSON", "zh": "劳森", "num": 30},
+    {"code": "ANTONELLI", "zh": "安东内利", "num": 12},
+    {"code": "BEARMAN", "zh": "贝尔曼", "num": 87},
+    {"code": "BORTOLETO", "zh": "博尔托莱托", "num": 5},
+    {"code": "HADJAR", "zh": "哈贾尔", "num": 6},
+    {"code": "COLAPINTO", "zh": "科拉平托", "num": 43},
+    {"code": "PEREZ", "zh": "佩雷兹", "num": 11},
+    {"code": "BOTTAS", "zh": "博塔斯", "num": 77},
+    {"code": "LINDBLAD", "zh": "林德布拉德", "num": 7}
+  ]
+}

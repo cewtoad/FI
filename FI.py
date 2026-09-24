@@ -100,6 +100,7 @@ def _ask_mode(port: int) -> str:
     print("=" * 46)
     print("  1) 网页模式  （推荐：浏览器面板 + 文字/语音问答）")
     print("  2) 语音模式  （全屏游戏内按键说话，需要本地语音依赖）")
+    print("  3) 设置      （在浏览器里修改配置，独立进程）")
     print("  q) 退出")
     try:
         choice = input("\n请选择 [1]: ").strip().lower()
@@ -109,6 +110,8 @@ def _ask_mode(port: int) -> str:
         return "web"
     if choice in ("2", "voice", "v"):
         return "voice"
+    if choice in ("3", "config", "c", "设置"):
+        return "config"
     return "q"
 
 
@@ -126,16 +129,49 @@ def _ensure_env_file() -> None:
             pass
 
 
+def _writable_check() -> bool:
+    """T10a: warn loudly when app_root() is read-only (e.g. Program Files)."""
+    from config import get_config
+    try:
+        writable = get_config().is_writable()
+    except Exception:
+        writable = False
+    if not writable:
+        print("⚠ 当前目录不可写（无法保存配置/会话记录）。")
+        print("  请把程序解压到桌面或 D 盘等可写位置后再运行。\n")
+    return writable
+
+
+def _run_selftest() -> None:
+    """T10a: run the whole-app self check (merged tool_selftest)."""
+    import tool_selftest
+    tool_selftest.main()
+
+
+def _run_config() -> None:
+    """T7: launch the standalone config page."""
+    import config_ui
+    config_ui.serve()
+
+
 def main() -> None:
     _ensure_env_file()
     p = argparse.ArgumentParser(description="F1 Race Engineer launcher")
     p.add_argument("--web", action="store_true", help="直接进入网页模式")
     p.add_argument("--voice", action="store_true", help="直接进入语音模式")
+    p.add_argument("--config", action="store_true", help="打开设置页（独立进程）")
+    p.add_argument("--selftest", action="store_true", help="整体自检后退出")
     p.add_argument("--port", type=int, default=20777, help="游戏 UDP 端口")
     p.add_argument("--web-port", type=int, default=8765, help="网页面板端口")
     p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     args, rest = p.parse_known_args()
 
+    if args.selftest:
+        _run_selftest()
+        return
+    if args.config:
+        _run_config()
+        return
     if args.web:
         _run_web(args.port, args.web_port, not args.no_browser)
         return
@@ -143,11 +179,14 @@ def main() -> None:
         _run_voice(args.port, rest)
         return
 
+    _writable_check()
     mode = _ask_mode(args.port)
     if mode == "web":
         _run_web(args.port, args.web_port, not args.no_browser)
     elif mode == "voice":
         _run_voice(args.port, rest)
+    elif mode == "config":
+        _run_config()
 
 
 if __name__ == "__main__":

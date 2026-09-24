@@ -45,6 +45,14 @@ function Build-Core {
         Write-Host "安装 PyInstaller 到 $BuildLib ..."
         py -3.12 -m pip install pyinstaller --target $BuildLib --quiet
     }
+    # T10a: hidden-imports come from the shared manifest (provider modules are
+    # registered by string, so PyInstaller's static analysis cannot see them).
+    $hidden = @()
+    py -3.12 build_manifest.py hidden-imports | ForEach-Object {
+        $hidden += "--hidden-import"; $hidden += $_
+    }
+    # T10a: sounddevice + numpy are NO LONGER excluded - the core pack shares
+    # one audio code path with the full pack (voice mode works there too).
     py -3.12 -m PyInstaller `
         --noconfirm --clean --onedir --noupx `
         --name F1Engineer `
@@ -54,8 +62,7 @@ function Build-Core {
         --exclude-module matplotlib `
         --exclude-module faster_whisper `
         --exclude-module ctranslate2 `
-        --exclude-module sounddevice `
-        --exclude-module numpy `
+        @hidden `
         --distpath $dist --workpath $work `
         FI.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败" }
@@ -65,7 +72,8 @@ function Build-Core {
     Copy-Item (Join-Path $root ".env.example") (Join-Path $exeDir ".env.example") -Force
     $zip = Join-Path $dist "F1Engineer-core-$Version-win64.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path $exeDir -DestinationPath $zip
+    # T10a: use zipfile via Python (Compress-Archive OOMs on big trees).
+    py -3.12 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_DEFLATED); import os; [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f), os.path.dirname(os.path.dirname(sys.argv[1])))) for r,_,fs in os.walk(sys.argv[2]) for f in fs]; z.close()" $zip $exeDir
     Write-Host "-> $zip" -ForegroundColor Green
     Get-FileHash $zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $(Split-Path $zip -Leaf)" } |
         Add-Content (Join-Path $dist "SHA256SUMS.txt")
@@ -83,33 +91,12 @@ function Build-Full {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-    # 1) application source.
-    #    - namespace packages (lib) are copied AS A DIRECTORY so `from lib.x`
-    #      keeps working;
-    #    - loose *.py files are copied individually.
-    $skipNames = @("build_lib", "dist", "build", "sessions", "__pycache__",
-                   "stt_lib", "stt_models", "python-embed", "png_src", ".git")
-
-    # 1a) lib/ (must stay a package directory named "lib")
-    Copy-Item (Join-Path $root "lib") (Join-Path $stage "lib") -Recurse -Force
-    Get-ChildItem (Join-Path $stage "lib") -Recurse -Directory -Filter "__pycache__" |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-    # 1b) top-level .py files (skip tests/dev tools)
-    $skipPy = @("tests_", "test_", "bench_", "capture", "probe_gamepad",
-                "fake_data", "voice_runner", "tool_stt_mic", "download_stt_model")
-    Get-ChildItem -Path $root -Filter "*.py" -File | ForEach-Object {
-        $n = $_.Name
-        if ($skipPy | Where-Object { $n.StartsWith($_) }) { return }
-        Copy-Item $_.FullName (Join-Path $stage $n) -Force
-    }
-
-    # 1c) static files
-    foreach ($f in @(".env.example", "README.md", "LICENSE", "启动.bat",
-                     "整体测试.bat", "FIRST_RUN.txt")) {
-        $src = Join-Path $root $f
-        if (Test-Path $src) { Copy-Item $src (Join-Path $stage $f) -Force }
-    }
+    # 1) application source + resources via the shared manifest whitelist
+    #    (T10a: no more filename-prefix filtering drift; tests/ and tools/ are
+    #    excluded by the manifest).
+    Write-Host "  复制应用源码/资源（build_manifest 白名单）..."
+    py -3.12 build_manifest.py full-copy --dest $stage
+    if ($LASTEXITCODE -ne 0) { throw "manifest full-copy 失败" }
 
     # 2) local voice dependencies + model (the whole point of the full pack)
     Write-Host "  复制 $SttLib ..."
@@ -125,14 +112,18 @@ function Build-Full {
         Write-Warning "未找到 python-embed (全量包将不附带 embedded Python)。请下载 python-3.12.x-embed-amd64.zip 解压到 python-embed/ 后重试。"
     }
 
-    # 4) launcher bat (points at embedded python, falls back to py -3.12)
+    # 4) launchers: ASCII start.bat (avoids unzip mojibake) + 启动.bat
+    if (Test-Path (Join-Path $root "start.bat")) {
+        Copy-Item (Join-Path $root "start.bat") (Join-Path $stage "start.bat") -Force
+    }
     Copy-Item (Join-Path $root "启动.bat") (Join-Path $stage "启动.bat") -Force
 
-    # 5) zip (zip64 for >4GB safety)
+    # 5) zip via Python zipfile (T10a: Compress-Archive OOMs on the full tree).
+    #    Never bundle .env / sessions/ / __pycache__ / HF cache junk.
     $zip = Join-Path $dist "F1Engineer-full-$Version-win64.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Write-Host "  压缩中（约 700MB，可能需几分钟）..."
-    Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -CompressionLevel Optimal
+    py -3.12 (Join-Path $root "tools\make_zip.py") $zip $stage
     Write-Host "-> $zip" -ForegroundColor Green
     Get-FileHash $zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $(Split-Path $zip -Leaf)" } |
         Add-Content (Join-Path $dist "SHA256SUMS.txt")

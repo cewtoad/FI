@@ -37,21 +37,24 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
       - name: Build core (onedir)
-        run: >
-          pyinstaller --noconfirm --clean --onedir --noupx
-          --name F1Engineer --version-file version_info.txt --paths .
-          --exclude-module tkinter --exclude-module matplotlib
-          --exclude-module faster_whisper --exclude-module ctranslate2
-          --exclude-module sounddevice --exclude-module numpy
-          FI.py
+        shell: pwsh
+        run: |
+          $hidden = @()
+          py -3.12 build_manifest.py hidden-imports | ForEach-Object {
+            $hidden += "--hidden-import"; $hidden += $_
+          }
+          py -3.12 -m PyInstaller --noconfirm --clean --onedir --noupx `
+            --name F1Engineer --version-file version_info.txt --paths . `
+            --exclude-module tkinter --exclude-module matplotlib `
+            --exclude-module faster_whisper --exclude-module ctranslate2 `
+            @hidden FI.py
       - name: Collect default config
         run: Copy-Item .env.example dist/F1Engineer/.env.example
       - name: Zip core
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart("v")
-          Compress-Archive -Path dist/F1Engineer `
-            -DestinationPath "dist/F1Engineer-core-$v-win64.zip"
+          py -3.12 tools/make_zip.py "dist/F1Engineer-core-$v-win64.zip" dist/F1Engineer
       - name: Upload core artifact
         uses: actions/upload-artifact@v4
         with:
@@ -84,8 +87,9 @@ jobs:
             ## F1 Race Engineer ${{ github.ref_name }}
 
             ### 下载哪个？
-            - **F1Engineer-core-*.zip**（约 25MB）：解压双击 `F1Engineer.exe`。
-              语音走云端 STT + Windows SAPI，填个 API key 即可，无需额外依赖。
+            - **F1Engineer-core-*.zip**（约 40MB）：解压双击 `F1Engineer.exe`。
+              已内置音频依赖（sounddevice/numpy），语音走云端 STT + Windows
+              SAPI/edge，填个 API key 即可；本地离线识别需用全量包。
             - **F1Engineer-full-*.zip**（约 760MB，见下）：内置本地语音识别，
               完全离线，解压即用。
 

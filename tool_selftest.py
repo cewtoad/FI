@@ -115,6 +115,69 @@ def _audio():
             f" 播放={o['name'] or '无'}（{o['source']}）")
 
 
+@check("资源文件（data/ 等只读资源）")
+def _resources():
+    from paths import resource_root
+    root = resource_root()
+    missing = []
+    for rel in ("data/driver_names.json",):
+        if not (root / rel).exists():
+            missing.append(rel)
+    if missing:
+        raise RuntimeError(f"缺少: {', '.join(missing)}")
+    return f"resource_root={root}"
+
+
+@check("UDP 端口预检 (20777)")
+def _port():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.bind(("127.0.0.1", 20777))
+        except OSError:
+            raise RuntimeError("20777 已被占用（SimHub/CrewChief？游戏数据收不到）")
+    return "可用"
+
+
+@check(".env 可读")
+def _env_readable():
+    from config import get_config
+    cfg = get_config()
+    model = cfg.get("LLM_MODEL") or "(默认)"
+    return f"LLM_MODEL={model}, 可写={cfg.is_writable()}"
+
+
+@check("SAPI 中文音色")
+def _sapi_voice():
+    import sys
+    if sys.platform != "win32":
+        raise RuntimeError("跳过：非 Windows")
+    from voices import list_voices
+    sapi = [v for v in list_voices() if v.provider == "sapi"]
+    if not sapi:
+        raise RuntimeError("未找到 SAPI 音色（Windows 未装语音包？）")
+    zh = [v for v in sapi if any("\u4e00" <= ch <= "\u9fff" for ch in v.voice)
+          or "Chinese" in v.voice]
+    return f"SAPI={len(sapi)} 个，中文={len(zh)} 个"
+
+
+@check("统一音频出口 (AudioPlayer 解码)")
+def _audio_player():
+    from speech import AudioPlayer, UnsupportedAudioFormat
+    import radio_fx
+    if not radio_fx.has_numpy():
+        raise RuntimeError("numpy 不可用（滤波器/提示音将跳过）")
+    beep = radio_fx.make_beep()
+    if not beep:
+        raise RuntimeError("提示音合成失败")
+    p = AudioPlayer()
+    try:
+        p._decode(beep, "audio/wav")
+    except UnsupportedAudioFormat as e:
+        raise RuntimeError(str(e))
+    return f"beep={len(beep)}B, wav 解码 OK"
+
+
 def main() -> int:
     print("=" * 52)
     print("  F1 Race Engineer  整体自检")
