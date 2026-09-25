@@ -43,6 +43,38 @@ def _port_busy(port: int, host: str = "127.0.0.1") -> bool:
     return False
 
 
+def _web_panel_running(web_port: int) -> bool:
+    """True when our own web panel already answers on ``web_port``."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{web_port}/api/state", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _require_port_free(udp_port: int, force: bool) -> bool:
+    """Refuse to start when another receiver already holds the UDP port.
+
+    The F1 UDP stream can only be received by ONE process, so running web mode
+    and voice mode at the same time makes them fight over the socket and the
+    telemetry becomes intermittent/wrong. Returns True when it is safe to
+    proceed.
+    """
+    if force or not _port_busy(udp_port):
+        return True
+    print("=" * 52)
+    print(f"[!] UDP 端口 {udp_port} 已被占用。")
+    print("    F1 的遥测流同一时间只能被一个进程接收。常见原因：")
+    print("      · 你已经在跑另一个模式（网页/语音只能开一个）；")
+    print("      · SimHub / CrewChief 等工具也占用了该端口。")
+    print("    请先关闭它，再启动本程序。")
+    print(f"    （确定要强行启动可加 --force，但两个实例会互相抢包。）")
+    print("=" * 52)
+    return False
+
+
 def _preflight(udp_port: int) -> None:
     if _port_busy(udp_port):
         print(f"⚠ 端口 {udp_port} 已被占用 —— 很可能是 SimHub / CrewChief 等"
@@ -63,8 +95,11 @@ def _open_browser_later(url: str) -> None:
     threading.Thread(target=_go, daemon=True).start()
 
 
-def _run_web(port: int, web_port: int, open_browser: bool) -> None:
+def _run_web(port: int, web_port: int, open_browser: bool,
+             force: bool = False) -> None:
     from webui import serve
+    if not _require_port_free(port, force):
+        raise SystemExit(2)
     _preflight(port)
     if open_browser:
         _open_browser_later(f"http://127.0.0.1:{web_port}")
@@ -92,8 +127,10 @@ def _voice_deps_present() -> bool:
         return False
 
 
-def _run_voice(port: int, argv: list) -> None:
+def _run_voice(port: int, argv: list, force: bool = False) -> None:
     import voice_main
+    if not _require_port_free(port, force):
+        raise SystemExit(2)
     _preflight(port)
     if not _voice_deps_present():
         print("⚠ 未检测到本地语音依赖 (faster-whisper / sounddevice)。")
@@ -176,6 +213,8 @@ def main() -> None:
     p.add_argument("--port", type=int, default=20777, help="游戏 UDP 端口")
     p.add_argument("--web-port", type=int, default=8765, help="网页面板端口")
     p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    p.add_argument("--force", action="store_true",
+                   help="UDP 端口被占用时仍强行启动（两个实例会互相抢包）")
     args, rest = p.parse_known_args()
 
     if args.selftest:
@@ -185,18 +224,18 @@ def main() -> None:
         _run_config()
         return
     if args.web:
-        _run_web(args.port, args.web_port, not args.no_browser)
+        _run_web(args.port, args.web_port, not args.no_browser, args.force)
         return
     if args.voice:
-        _run_voice(args.port, rest)
+        _run_voice(args.port, rest, args.force)
         return
 
     _writable_check()
     mode = _ask_mode(args.port)
     if mode == "web":
-        _run_web(args.port, args.web_port, not args.no_browser)
+        _run_web(args.port, args.web_port, not args.no_browser, args.force)
     elif mode == "voice":
-        _run_voice(args.port, rest)
+        _run_voice(args.port, rest, args.force)
     elif mode == "config":
         _run_config()
 

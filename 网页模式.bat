@@ -18,6 +18,7 @@ if not defined PY (
 )
 
 echo Starting WEB mode... (browser will open http://127.0.0.1:8765)
+echo NOTE: run ONLY one mode at a time (web OR voice), or they fight over UDP.
 echo.
 %PY% FI.py --web
 

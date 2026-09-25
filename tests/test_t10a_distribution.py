@@ -65,6 +65,23 @@ def test_start_bat_is_ascii_and_exists():
     p.read_bytes().decode("ascii")  # must be pure ASCII
 
 
+def test_udp_port_guard_blocks_second_instance():
+    """Only one process may receive the F1 UDP stream; a second must be refused.""" 
+    import socket
+
+    import FI
+
+    assert FI._require_port_free(20801, force=False) is True
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("127.0.0.1", 20801))
+        assert FI._require_port_free(20801, force=False) is False
+        assert FI._require_port_free(20801, force=True) is True
+    finally:
+        s.close()
+
+
 def test_make_zip_drops_hf_cache_junk_keeps_model(tmp_path):
     """HF hub cache junk must not be packed; the model blobs/snapshots must be."""
     stage = tmp_path / "stage"

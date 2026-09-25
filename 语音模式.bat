@@ -18,6 +18,7 @@ if not defined PY (
 )
 
 echo Starting VOICE mode... (press NUMPAD + in game to talk, Ctrl+C to quit)
+echo NOTE: run ONLY one mode at a time (web OR voice), or they fight over UDP.
 echo.
 %PY% FI.py --voice
 
