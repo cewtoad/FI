@@ -229,3 +229,11 @@
 - `ptt_controller.py`（纯状态机，无需改）
 - `voice_main.py`（通过 `make_source` / 配置绑定，无需改）
 - `config_schema.py`：`PTT_MODE` / `PTT_BINDING` / `PTT_DOUBLE_TAP_WINDOW_MS`
+
+### PTT 交互决定（B1）
+- **取消局内双击静音**。原因：toggle 模式下“按一下开始、再按一下结束”的两次短按
+  会被误判为双击，本该停止录音却切成了静音（实测发现）。
+- 现在：toggle 模式**录音中按下必为停止**；空闲短按=开始；长按无动作。
+- **静音只在配置页调整**（`RADIO_QUIET_POLICY`），局内不再快捷切换。
+- `PTT_DOUBLE_TAP_WINDOW_MS` 保留以兼容旧 `.env`，但已不再生效。
+

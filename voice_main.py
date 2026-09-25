@@ -106,23 +106,6 @@ class VoiceApp:
             with self._lock:
                 if self._recording:
                     self._stop_and_answer_locked()
-        elif action.kind == "toggle_quiet":
-            self._toggle_quiet()
-
-    def _toggle_quiet(self) -> None:
-        radio = getattr(self.app, "radio", None)
-        if radio is None:
-            return
-        applied, msg = radio.set_quiet(not radio.quiet_state())
-        from radio_templates import render as _render
-        text = _render(msg)
-        if not applied:
-            text = _render("quiet_locked")
-        if text:
-            print(f"[voice] {text}", flush=True)
-        # Speak the confirmation via the arbiter (system, bypasses gate).
-        if self.arbiter is not None:
-            self.arbiter.play_now(text)
 
     def _on_tap(self) -> None:
         # Kept for callers that only have a tap callback; the controller's

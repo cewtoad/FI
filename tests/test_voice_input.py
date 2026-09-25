@@ -36,21 +36,22 @@ def test_toggle_mode_short_press_toggles():
     p.on_press(); c.adv(0.1)
     a = p.on_release()
     assert a.kind == "start_recording" and p.recording
-    c.adv(1.0)  # past the double-tap window
+    c.adv(1.0)  # past the old double-tap window
     p.on_press(); c.adv(0.1)
     a = p.on_release()
     assert a.kind == "stop_recording" and not p.recording
 
 
-def test_toggle_double_tap_is_quiet_not_recording():
+def test_toggle_fast_start_then_stop_is_not_quiet():
+    """B1: a fast tap-start then tap-stop must stop recording, never toggle
+    quiet (the old double-tap misread)."""
     c = Clock()
     p = PTTController(mode="toggle", double_tap_window_ms=400, clock=c)
-    p.on_press(); c.adv(0.1); p.on_release()   # first tap
-    c.adv(0.2)                                  # within window
-    p.on_press(); c.adv(0.1)
-    a = p.on_release()
-    assert a.kind == "toggle_quiet"
-    assert not p.recording
+    p.on_press(); c.adv(0.1); r1 = p.on_release()   # start
+    c.adv(0.05)                                      # within the old window
+    p.on_press(); c.adv(0.1); r2 = p.on_release()   # must be a stop
+    assert r1.kind == "start_recording"
+    assert r2.kind == "stop_recording" and not p.recording
 
 
 def test_long_press_is_not_a_tap():
