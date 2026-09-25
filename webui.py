@@ -182,6 +182,7 @@ PAGE = r"""<!doctype html>
     <h1>遥测面板 <span id="conn" class="badge wait">等待数据</span>
       <a href="#" id="openSet" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;">设置</a>
     </h1>
+    <div id="alertbar" style="display:none"></div>
     <div id="facts"></div>
     <div class="notes" id="notes"></div>
     <div class="meta" id="meta"></div>
@@ -250,6 +251,20 @@ function renderBoard(rows){
     html += `<div class="row" ${me}><span>${r.position}. ${esc(r.driver||"-")}</span><span class="v">${esc(tyre)}  ${gap}</span></div>`;
   }
   el.innerHTML = html;
+}
+function renderAlerts(alerts){
+  const el = document.getElementById("alertbar");
+  if (!alerts || !alerts.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+  // Newest last from the server; show the most recent few, newest on top.
+  const recent = alerts.slice(-4).reverse();
+  const color = p => p === 0 ? "#ff5c5c" : (p === 1 ? "#ffb020" : "#7ab8ff");
+  el.style.display = "";
+  el.innerHTML = recent.map(a =>
+    `<div style="border-left:3px solid ${color(a.priority)};background:#101f2e;`+
+    `padding:6px 10px;margin:6px 0;border-radius:6px;font-size:13px;">`+
+    `<span style="color:${color(a.priority)};font-weight:700;">${
+      a.priority===0?'P0':(a.priority===1?'P1':'P2')}</span> `+
+    `${esc(a.text||"")}</div>`).join("");
 }
 function addMsg(who, text){
   const log = document.getElementById("log");
@@ -340,6 +355,7 @@ async function poll(){
     renderFacts(sm.facts);
     renderNotes(sm.notes);
     renderBoard(sm.leaderboard);
+    renderAlerts(d.alerts || []);
   const conn = document.getElementById("conn");
   const live = d.stats.accepted > 0 && d.summary.facts.lap;
   conn.className = "badge " + (live ? "live" : "wait");
