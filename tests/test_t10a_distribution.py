@@ -63,3 +63,33 @@ def test_start_bat_is_ascii_and_exists():
     p = build_manifest.ROOT / "start.bat"
     assert p.exists()
     p.read_bytes().decode("ascii")  # must be pure ASCII
+
+
+def test_make_zip_drops_hf_cache_junk_keeps_model(tmp_path):
+    """HF hub cache junk must not be packed; the model blobs/snapshots must be."""
+    stage = tmp_path / "stage"
+    model = stage / "stt_models" / "models--Systran--faster-whisper-small"
+    (model / "blobs").mkdir(parents=True)
+    (model / "snapshots" / "rev").mkdir(parents=True)
+    (model / "refs").mkdir(parents=True)
+    (model / "blobs" / "abc123").write_bytes(b"WEIGHTS")
+    (model / "snapshots" / "rev" / "model.bin").write_bytes(b"WEIGHTS")
+    # junk that must be dropped
+    (stage / "stt_models" / ".locks").mkdir()
+    (stage / "stt_models" / ".locks" / "lock").write_bytes(b"x")
+    (model / "trees").mkdir()
+    (model / "trees" / "t.json").write_text("{}", encoding="utf-8")
+    (stage / "stt_models" / ".agent_harnesses.json").write_text("{}", encoding="utf-8")
+    (stage / "stt_models" / "CACHEDIR.TAG").write_text("tag", encoding="utf-8")
+
+    out = tmp_path / "out.zip"
+    make_zip(str(out), str(stage))
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+        blob = z.read(next(n for n in names if n.endswith("blobs/abc123")))
+    assert blob == b"WEIGHTS"
+    assert any("snapshots/rev/model.bin" in n for n in names)
+    assert not any(".locks" in n for n in names)
+    assert not any("/trees/" in n for n in names)
+    assert not any(".agent_harnesses.json" in n for n in names)
+    assert not any("CACHEDIR.TAG" in n for n in names)

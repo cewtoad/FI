@@ -1,9 +1,10 @@
 """Text-to-speech (TTS) clients for the voice link.
 
 Providers (TTS_PROVIDER in .env / environment):
-    edge - edge-tts (OPTIONAL dependency; neural voices; needs network)
-    sapi - Windows built-in System.Speech via PowerShell (zero deps, offline)
-    off  - disable TTS (answers stay text-only)
+    edge  - edge-tts (OPTIONAL dependency; neural voices; needs network)
+    sapi  - Windows built-in System.Speech via PowerShell (zero deps, offline)
+    piper - piper-tts (OPTIONAL, fully local/offline neural; needs a .onnx model)
+    off   - disable TTS (answers stay text-only)
 
 Unset -> auto-detect: edge when edge-tts is installed, else sapi on Windows,
 else off. Runtime synthesis failures degrade to text-only in voice.py.
@@ -169,6 +170,70 @@ class SapiTTS(TTSEngine):
                 return f.read()
 
 
+class PiperTTS(TTSEngine):
+    """Piper neural TTS - fully local / offline (T3.5 / stop point #4 resolved).
+
+    piper-tts (import ``piper``) runs an ONNX voice model on CPU. Chinese needs
+    the ``[zh]`` extra (g2pW phonemizer). Output is a real WAV, so it plays
+    through AudioPlayer with no MP3 decoder needed.
+
+    ``voice`` is the path to a ``.onnx`` model (its ``.onnx.json`` config is
+    auto-discovered alongside it). The model is loaded lazily on first use
+    because loading takes a moment.
+    """
+
+    name = "piper"
+    mime = "audio/wav"
+
+    def __init__(self, voice: Optional[str] = None, rate=None) -> None:
+        cfg = get_config()
+        self.voice_path = (voice or cfg.get("TTS_PIPER_VOICE", "")).strip()
+        # length_scale > 1 is slower; map our -10..10 rate to roughly 1 + rate/20.
+        self.length_scale = _piper_length_scale(rate)
+        self._piper = None
+        self._voice_obj = None
+        try:
+            import piper  # noqa: F401
+            self._piper = piper
+        except Exception:
+            self._piper = None
+
+    @property
+    def available(self) -> bool:
+        if self._piper is None:
+            return False
+        import os
+        return bool(self.voice_path) and os.path.exists(self.voice_path)
+
+    def synthesize(self, text: str) -> bytes:
+        if not self.available:
+            raise RuntimeError("piper not installed or TTS_PIPER_VOICE not set")
+        import io
+        import wave
+
+        voice = self._ensure_voice()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wav_file:
+            voice.synthesize_wav(text, wav_file)
+        return buf.getvalue()
+
+    def _ensure_voice(self):
+        if self._voice_obj is None:
+            self._voice_obj = self._piper.PiperVoice.load(self.voice_path)
+        return self._voice_obj
+
+
+def _piper_length_scale(rate) -> Optional[float]:
+    """Map a rate into Piper's length_scale (1.0 = normal, >1 slower)."""
+    if rate is None or rate == "":
+        return None
+    try:
+        v = int(float(str(rate).replace("%", "").replace("+", "")))
+    except (TypeError, ValueError):
+        return None
+    return max(0.5, min(2.0, 1.0 - v / 20.0))
+
+
 def make_tts() -> Optional[TTSEngine]:
     """Pick the TTS provider from config (explicit wins, else auto-detect)."""
     cfg = get_config()
@@ -180,6 +245,9 @@ def make_tts() -> Optional[TTSEngine]:
         return eng if eng.available else None
     if provider == "sapi":
         eng = SapiTTS()
+        return eng if eng.available else None
+    if provider == "piper":
+        eng = PiperTTS()
         return eng if eng.available else None
     # auto: edge when installed, else sapi on Windows, else off
     edge = EdgeTTS()

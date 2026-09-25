@@ -110,7 +110,13 @@ function Build-Full {
     Write-Host "  复制 $SttLib ..."
     Copy-Item $SttLib (Join-Path $stage "stt_lib") -Recurse -Force
     Write-Host "  复制 $SttModels ..."
-    Copy-Item $SttModels (Join-Path $stage "stt_models") -Recurse -Force
+    # T10a/T10b: copy the whisper model but drop HuggingFace cache JUNK
+    # (.locks / trees / .agent_harnesses.json / CACHEDIR.TAG). blobs/ +
+    # snapshots/ + refs/ are the model itself and must be kept.
+    $modelsDst = Join-Path $stage "stt_models"
+    robocopy $SttModels $modelsDst /E /NFL /NDL /NJH /NJS /NP `
+        /XD ".locks" "trees" /XF ".agent_harnesses.json" "CACHEDIR.TAG" | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy stt_models 失败 ($LASTEXITCODE)" }
 
     # 3) embedded Python runtime (must be provided; see FIRST_RUN.txt)
     $embed = Join-Path $root "python-embed"

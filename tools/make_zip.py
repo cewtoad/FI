@@ -15,8 +15,15 @@ import sys
 import zipfile
 
 # Paths (relative) never included in the archive.
-EXCLUDE_DIR_NAMES = {"__pycache__", ".git", ".pytest_cache", "sessions"}
-EXCLUDE_FILE_NAMES = {".env"}
+EXCLUDE_DIR_NAMES = {
+    "__pycache__", ".git", ".pytest_cache", "sessions",
+    # HuggingFace hub cache junk around the whisper model: pure metadata,
+    # locks and dry-run markers. The model itself lives in blobs/ + snapshots/
+    # + refs/ and MUST be kept (snapshots/* are symlinks into blobs/, which
+    # zipfile follows when writing, so the real weights get stored).
+    ".locks", "trees",
+}
+EXCLUDE_FILE_NAMES = {".env", ".agent_harnesses.json", "CACHEDIR.TAG"}
 # HuggingFace download caches can appear under stt_models - drop them.
 EXCLUDE_DIR_SUFFIXES = (".cache",)
 

@@ -82,6 +82,7 @@ SCHEMA: Tuple[Setting, ...] = (
     Setting("TTS_RATE", "int", 0, "voice", "语速", min_value=-10, max_value=10),
     Setting("TTS_VOLUME", "float", 1.0, "voice", "音量", min_value=0.0, max_value=2.0),
     Setting("TTS_VOICEPACK", "str", "", "voice", "语音包"),
+    Setting("TTS_PIPER_VOICE", "str", "", "voice", "Piper 模型 (.onnx 路径)"),
     # ---- Debrief / config UI (§6.4) ----
     Setting("DEBRIEF_ENABLE", "bool", True, "debrief", "赛后复盘"),
     Setting("DEBRIEF_DIR", "str", "sessions", "debrief", "复盘输出目录"),

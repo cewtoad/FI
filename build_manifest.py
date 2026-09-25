@@ -89,6 +89,10 @@ HIDDEN_IMPORT_MODULES = [
 # Read-only resource directories shipped as-is.
 RESOURCE_DIRS = ["lib", "data"]
 
+# Optional voice-model directory (Piper). Copied when present; the pack is
+# still valid without it (Piper simply reports unavailable).
+OPTIONAL_RESOURCE_DIRS = ["piper_models"]
+
 # Static files copied into the full pack.
 STATIC_FILES = [".env.example", "README.md", "LICENSE", "FIRST_RUN.txt", "start.bat"]
 
@@ -119,6 +123,17 @@ def full_copy(dest: Path) -> int:
         shutil.copy2(ROOT / name, dest / name)
         count += 1
     for d in RESOURCE_DIRS:
+        src = ROOT / d
+        if not src.is_dir():
+            continue
+        out = dest / d
+        if out.exists():
+            shutil.rmtree(out, ignore_errors=True)
+        shutil.copytree(src, out, ignore=shutil.ignore_patterns(
+            "__pycache__", ".locks", "trees",
+            ".agent_harnesses.json", "CACHEDIR.TAG", "*.cache"))
+        count += sum(1 for _ in out.rglob("*") if _.is_file())
+    for d in OPTIONAL_RESOURCE_DIRS:
         src = ROOT / d
         if not src.is_dir():
             continue

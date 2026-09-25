@@ -95,8 +95,11 @@ def _make_edge(pack: Optional[VoicePack]):
 
 
 def _make_piper(pack: Optional[VoicePack]):
-    # STOP POINT #4: package/import/API unverified; keep disabled until probed.
-    return None
+    # T3.5 / stop point #4 resolved: piper-tts import name is `piper`; output is
+    # a real WAV (no MP3 decoder needed). Voice = path to a .onnx model.
+    from tts_client import PiperTTS
+    return PiperTTS(voice=pack.voice if pack else None,
+                    rate=pack.rate if pack else None)
 
 
 def _make_default(pack: Optional[VoicePack]):
