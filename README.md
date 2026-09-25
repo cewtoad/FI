@@ -36,7 +36,7 @@
 | 体积 | 约 40 MB | 约 950 MB |
 | 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `start.bat`（或 `启动.bat`） |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
-| 语音播报 | ✅ 已含 sounddevice/numpy，SAPI/edge 可用 | ✅ 本地 whisper + SAPI/edge |
+| 语音播报 | ✅ 已含 sounddevice/numpy，SAPI/Piper 可用 | ✅ 本地 whisper + SAPI/Piper |
 | 语音识别 | 云端 STT（填 key） | **本地 whisper，完全离线** |
 | 适合 | 大多数人、首次尝试 | 想离线 / 隐私 / 不想买 STT 额度 |
 
@@ -214,11 +214,11 @@ py -3.12 FI.py --config        # 浏览器打开 http://127.0.0.1:8766
 
 ### TTS 后端
 
-`TTS_PROVIDER=auto|edge|sapi|piper|off`：
-- `edge`：神经音色，需联网、~30KB；
+`TTS_PROVIDER=auto|sapi|piper|off`（本地播报只用 SAPI/Piper，均输出 WAV，无需任何解码器）：
 - `sapi`：Windows 自带，零依赖（中文需系统中文语音包）；
 - `piper`：**完全离线**神经语音，需 `pip install "piper-tts[zh]"` 并下载模型
-  （`py -3.12 -m tools.download_piper_voice`），设 `TTS_PIPER_VOICE=<.onnx 路径>`。
+  （`py -3.12 -m tools.download_piper_voice`），设 `TTS_PIPER_VOICE=<.onnx 路径>`；
+- `auto`：有 Piper 模型用 Piper，否则 Windows 用 SAPI。
 
 ### 原始 UDP 录制 / 回放（离线调试）
 

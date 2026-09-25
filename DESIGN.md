@@ -187,7 +187,7 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 | 功能 | 说明 |
 |---|---|
 | **STT 语音输入** | ✅ Raw Input PTT（hold/toggle/双击静音）→ 录音 → 云端或本地 whisper |
-| **TTS 语音输出** | ✅ SAPI/edge/Piper 语音包，统一出口 `speech.SpeechArbiter` |
+| **TTS 语音输出** | ✅ SAPI/Piper 语音包，统一出口 `speech.SpeechArbiter` |
 | **推演层** | ✅ `race_model.py`：Stint/配速衰退/GapTrend/PitWindow/天气 |
 | **主动播报** | ✅ `radio_director.py`：本地模板规则引擎（**无 LLM**），直道时机闸门 |
 | **统一音频出口** | ✅ 可打断、可暂停、优先级队列、过期丢弃 |

@@ -4,13 +4,13 @@ Maps a user-selectable ``VoicePack`` (provider + engine voice id + tuning) to a
 concrete TTS engine. The engine-specific rate/volume encoding is handled by a
 per-provider adapter so callers never build engine strings.
 
-Backward compatibility: ``make_tts()`` with no argument keeps the previous
-config-driven behaviour (edge if installed, else sapi), so existing .env files
-and the voice link keep working unchanged.
+Backward compatibility: ``make_tts()`` with no argument keeps the config-driven
+behaviour (piper when a model is set, else sapi), so existing .env files and the
+voice link keep working unchanged.
 
-Piper support (STOP POINT #4): the import name / API is not yet verified, so
-Piper is registered but ``available`` stays False until the real package is
-inspected on a machine that has it.
+Local TTS is SAPI (system, WAV) + Piper (offline neural, WAV). Both emit WAV,
+so the local audio path needs no MP3 decoder (edge-tts was removed: it only
+emits MP3).
 """
 
 from __future__ import annotations
@@ -51,26 +51,13 @@ def _list_sapi_voices() -> List[str]:
     return []
 
 
-# Static Chinese neural voice list (edge-tts). Kept small and useful.
-_EDGE_ZH_VOICES = [
-    ("zh-CN-XiaoxiaoNeural", "晓晓（女·普通话）"),
-    ("zh-CN-YunxiNeural", "云希（男·普通话）"),
-    ("zh-CN-YunyangNeural", "云扬（男·新闻）"),
-    ("zh-CN-XiaoyiNeural", "晓伊（女·活泼）"),
-    ("zh-CN-YunjianNeural", "云健（男·解说）"),
-]
-
-
 def list_voices() -> List[VoicePack]:
-    """Return the available voice packs (SAPI + edge + Piper if present)."""
+    """Return the available voice packs (SAPI + Piper if present)."""
     out: List[VoicePack] = []
     for name in _list_sapi_voices():
         out.append(VoicePack(id=f"sapi:{name}", provider="sapi", voice=name,
                              label=f"[SAPI] {name}"))
-    for voice_id, label in _EDGE_ZH_VOICES:
-        out.append(VoicePack(id=f"edge:{voice_id}", provider="edge",
-                             voice=voice_id, label=f"[Edge] {label}"))
-    # Piper: scan piper_models/*.onnx (best-effort; API unverified).
+    # Piper: scan piper_models/*.onnx (offline neural voices).
     try:
         from paths import app_root
         model_dir = app_root() / "piper_models"
@@ -89,14 +76,9 @@ def _make_sapi(pack: Optional[VoicePack]):
                    rate=pack.rate if pack else None)
 
 
-def _make_edge(pack: Optional[VoicePack]):
-    from tts_client import EdgeTTS
-    return EdgeTTS(voice=pack.voice if pack else None, rate=pack.rate if pack else None)
-
-
 def _make_piper(pack: Optional[VoicePack]):
-    # T3.5 / stop point #4 resolved: piper-tts import name is `piper`; output is
-    # a real WAV (no MP3 decoder needed). Voice = path to a .onnx model.
+    # piper-tts import name is `piper`; output is a real WAV (no MP3 decoder
+    # needed). Voice = path to a .onnx model.
     from tts_client import PiperTTS
     return PiperTTS(voice=pack.voice if pack else None,
                     rate=pack.rate if pack else None)
@@ -108,15 +90,14 @@ def _make_default(pack: Optional[VoicePack]):
 
 
 register_provider("sapi", _make_sapi)
-register_provider("edge", _make_edge)
 register_provider("piper", _make_piper)
 
 
 def make_tts(pack: Optional[VoicePack] = None):
     """Build a TTS engine.
 
-    No ``pack`` -> legacy config-driven selection (edge else sapi), preserving
-    the pre-T3 behaviour. With a pack -> that provider, or None if unavailable.
+    No ``pack`` -> config-driven selection (piper else sapi), preserving the
+    pre-T3 behaviour. With a pack -> that provider, or None if unavailable.
     """
     if pack is None:
         return _make_default(None)

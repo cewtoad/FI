@@ -140,7 +140,7 @@
 ### 待实测 / 停止点
 - **胎温阈值标定**：`TYRE_HOT_INNER_C` 默认 110 为占位值，需回放真实数据标定。
 - **DualSense HID 报告偏移**：需跑 `py -3.12 -m tools.probe_dualsense` 实测后再启用 HID 源。
-- **edge MP3 解码**：当前 AudioPlayer 只原生解码 WAV；edge 返回 MP3 需要新依赖（audioop 已被 3.13 删除，禁用），未决。
+- **edge MP3 解码**：✅ 已解决（按用户决定：**彻底移除 edge**）。本地播报只用 SAPI + Piper（均输出 WAV），不再有 MP3 解码问题；`EdgeTTS` / edge 语音包 / `_edge_rate` 已从代码移除。
 - **Piper**：✅ 已解决——`piper-tts` import 名为 `piper`，`PiperVoice.load(.onnx)
   .synthesize_wav()` 输出真实 WAV（不碰 MP3 解码）。`tts_client.PiperTTS` +
   `voices` + `tools/download_piper_voice.py` 已接入；需 `pip install "piper-tts[zh]"`

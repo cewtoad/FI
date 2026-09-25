@@ -107,7 +107,7 @@ class VoicePack:
     """A selectable voice: provider + engine-specific voice id + tuning."""
 
     id: str
-    provider: str          # "sapi" | "edge" | "piper"
+    provider: str          # "sapi" | "piper"
     voice: str
     rate: str = ""
     volume: str = ""

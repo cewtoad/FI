@@ -218,12 +218,12 @@ def test_arbiter_recording_pause():
 
 def test_voices_list_and_rate_conversion():
     import voices
-    from tts_client import _edge_rate, _sapi_rate
+    from tts_client import _sapi_rate
     assert _sapi_rate(0) == 0
     assert _sapi_rate("+10%") == 1
     assert _sapi_rate(5) == 5
     assert _sapi_rate(50) == 10        # clamped to SAPI's -10..10
-    assert _edge_rate(1) == "+10%"
-    assert _edge_rate("+20%") == "+20%"
     packs = voices.list_voices()
     assert all(isinstance(p, VoicePack) for p in packs)
+    # edge is gone: no provider may claim to be edge.
+    assert all(p.provider != "edge" for p in packs)

@@ -333,8 +333,8 @@ class SpeechArbiter:
             self.player.play(audio, getattr(self.tts, "mime", "audio/wav"))
             self.spoken += 1
         except UnsupportedAudioFormat as e:
-            # Decoder missing (e.g. edge MP3): speak text is still displayed by
-            # the caller; here we just log so the queue keeps moving.
+            # Unsupported payload (e.g. a non-WAV engine): text is still shown
+            # by the caller; here we log so the queue keeps moving.
             self._log.warning("playback skipped: %s", e)
 
 
