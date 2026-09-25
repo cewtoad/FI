@@ -68,6 +68,8 @@ RUNTIME_MODULES = [
     "audio.py",
     "paths.py",
     "ai_client.py",
+    # Runtime tool used by FI.py --selftest (must ship in both packs).
+    "tool_selftest.py",
 ]
 
 # Modules imported by string (provider registries) - must be hidden-imported so

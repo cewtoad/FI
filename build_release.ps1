@@ -95,7 +95,9 @@ function Build-Full {
     Assert-Path $SttLib "本地语音依赖目录 (faster-whisper)"
     Assert-Path $SttModels "语音模型目录"
 
-    $stage = Join-Path $work "full"
+    # Stage named F1Engineer so the zip's top-level folder is F1Engineer/
+    # (make_zip writes arcnames relative to the stage's parent).
+    $stage = Join-Path $work "F1Engineer"
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
