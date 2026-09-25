@@ -305,9 +305,12 @@ class VoiceApp:
         from input_sources import parse_binding
         binding = parse_binding(get_config().get("PTT_BINDING", "kb:0x6B"))
         vk = binding["vk"] if binding and binding["type"] == "kb" else TRIGGER_VK
-        self.trigger = RawKeyTrigger(on_tap=self._on_tap, vk=vk,
-                                     on_press=self._on_ptt_press,
-                                     on_release=self._on_ptt_release)
+        # PTT is driven purely by press/release through the controller. Do NOT
+        # also pass on_tap: RawKeyTrigger fires on_tap right after on_release,
+        # which would immediately stop the recording we just started.
+        self.trigger = RawKeyTrigger(on_press=self._on_ptt_press,
+                                     on_release=self._on_ptt_release,
+                                     vk=vk)
         mode = self.ptt.mode
         print(f"PTT 模式={mode}，按键 VK=0x{vk:02X}。按 {mode} 方式说话，Ctrl+C 退出。\n")
         self.trigger.run_blocking()  # blocks (main thread)

@@ -84,7 +84,8 @@ class RawKeyTrigger:
     tap-to-toggle semantics (tap once to start, tap again to stop).
     """
 
-    def __init__(self, on_tap: Callable[[], None], vk: int = TRIGGER_VK,
+    def __init__(self, on_tap: Optional[Callable[[], None]] = None,
+                 vk: int = TRIGGER_VK,
                  on_press: Optional[Callable[[], None]] = None,
                  on_release: Optional[Callable[[], None]] = None) -> None:
         self.on_tap = on_tap
@@ -133,8 +134,9 @@ class RawKeyTrigger:
             self._pressed = False
             if self.on_release:
                 self.on_release()
-            # a full press+release = one tap
-            self.on_tap()
+            # a full press+release = one tap (only if a tap handler is set)
+            if self.on_tap:
+                self.on_tap()
 
     def _run(self) -> None:
         hinst = kernel32.GetModuleHandleW(None)
