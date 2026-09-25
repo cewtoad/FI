@@ -156,9 +156,14 @@ def _sapi_voice():
     sapi = [v for v in list_voices() if v.provider == "sapi"]
     if not sapi:
         raise RuntimeError("未找到 SAPI 音色（Windows 未装语音包？）")
-    zh = [v for v in sapi if any("\u4e00" <= ch <= "\u9fff" for ch in v.voice)
-          or "Chinese" in v.voice]
-    return f"SAPI={len(sapi)} 个，中文={len(zh)} 个"
+    # Chinese SAPI voices often have romanized names (Huihui/Yaoyao/Kangkang…),
+    # so match on a known-name list in addition to CJK characters / "Chinese".
+    zh_names = ("huihui", "yaoyao", "kangkang", "lili", "chinese", "zh-")
+    zh = [v for v in sapi
+          if any("\u4e00" <= ch <= "\u9fff" for ch in v.voice)
+          or any(n in v.voice.lower() for n in zh_names)]
+    return f"SAPI={len(sapi)} 个，中文={len(zh)} 个" + (
+        f"（{', '.join(v.voice for v in zh)}）" if zh else "")
 
 
 @check("统一音频出口 (AudioPlayer 解码)")

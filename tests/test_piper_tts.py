@@ -33,7 +33,7 @@ class _FakePiper:
 
         class PiperVoice:
             @staticmethod
-            def load(path):
+            def load(path, download_dir=None):
                 return _FakeVoice(path)
 
         self.PiperVoice = PiperVoice

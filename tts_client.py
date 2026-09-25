@@ -40,6 +40,30 @@ def _sapi_rate(rate) -> Optional[int]:
     return max(-10, min(10, v))
 
 
+def _pick_chinese_sapi_voice() -> Optional[str]:
+    """Return an installed Chinese SAPI voice name, or None (best-effort)."""
+    if sys.platform != "win32":
+        return None
+    names = ("huihui", "yaoyao", "kangkang", "lili", "chinese", "zh-")
+    try:
+        import subprocess
+        script = ("Add-Type -AssemblyName System.Speech; "
+                  "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                  ".GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }")
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        for line in out.stdout.decode("utf-8", "replace").splitlines():
+            name = line.strip()
+            if name and any(n in name.lower() for n in names):
+                return name
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 class TTSEngine:
     """Base class for swappable TTS providers."""
 
@@ -69,6 +93,11 @@ class SapiTTS(TTSEngine):
     def __init__(self, voice: Optional[str] = None, rate=None) -> None:
         cfg = get_config()
         self.voice = (voice or cfg.get("TTS_SAPI_VOICE", "")).strip()
+        # No explicit voice: prefer an installed Chinese voice so the (Chinese)
+        # race-engineer speech is intelligible instead of read by an English
+        # voice. Falls back to the system default when none is found.
+        if not self.voice:
+            self.voice = _pick_chinese_sapi_voice() or ""
         self.timeout = float(cfg.get("TTS_TIMEOUT", "30"))
         self.rate = _sapi_rate(rate)
 
@@ -169,7 +198,22 @@ class PiperTTS(TTSEngine):
 
     def _ensure_voice(self):
         if self._voice_obj is None:
-            self._voice_obj = self._piper.PiperVoice.load(self.voice_path)
+            # Point download_dir at piper_models/ so the Chinese g2pW resource
+            # (needed for the pinyin phonemizer) is looked up next to the voice
+            # model instead of in the process CWD.
+            download_dir = None
+            try:
+                from paths import app_root
+                dl = app_root() / "piper_models"
+                if dl.is_dir():
+                    download_dir = str(dl)
+            except Exception:  # noqa: BLE001
+                pass
+            if download_dir:
+                self._voice_obj = self._piper.PiperVoice.load(
+                    self.voice_path, download_dir=download_dir)
+            else:
+                self._voice_obj = self._piper.PiperVoice.load(self.voice_path)
         return self._voice_obj
 
 
@@ -196,9 +240,12 @@ def make_tts() -> Optional[TTSEngine]:
     if provider == "piper":
         eng = PiperTTS()
         return eng if eng.available else None
-    # auto: piper when a model is configured, else sapi on Windows, else off.
-    piper = PiperTTS()
-    if piper.available:
-        return piper
+    # auto: prefer sapi (zero deps, instant) over piper. Piper is opt-in only
+    # (TTS_PROVIDER=piper) because its Chinese pinyin path needs the large g2pW
+    # resource and was not reliable on every machine; making it the default
+    # would risk a slow/hanging synth. Explicit TTS_PROVIDER=piper still works.
     sapi = SapiTTS()
-    return sapi if sapi.available else None
+    if sapi.available:
+        return sapi
+    piper = PiperTTS()
+    return piper if piper.available else None
