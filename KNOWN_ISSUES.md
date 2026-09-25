@@ -141,8 +141,16 @@
 - **胎温阈值标定**：`TYRE_HOT_INNER_C` 默认 110 为占位值，需回放真实数据标定。
 - **DualSense HID 报告偏移**：需跑 `py -3.12 -m tools.probe_dualsense` 实测后再启用 HID 源。
 - **edge MP3 解码**：当前 AudioPlayer 只原生解码 WAV；edge 返回 MP3 需要新依赖（audioop 已被 3.13 删除，禁用），未决。
-- **Piper**：import 名/API 未核实，provider 暂禁用。
-- **embedded `._pth`**：已加规范化脚本，仍需在真实全量包上验证 `import config/lib`。
+- **Piper**：✅ 已解决——`piper-tts` import 名为 `piper`，`PiperVoice.load(.onnx)
+  .synthesize_wav()` 输出真实 WAV（不碰 MP3 解码）。`tts_client.PiperTTS` +
+  `voices` + `tools/download_piper_voice.py` 已接入；需 `pip install "piper-tts[zh]"`
+  并下载中文模型。
+- **embedded `._pth`**：✅ 已在真实全量包（0.3.4）验证——embedded python 能
+  `import config` / `import lib`，selftest 14/15（唯一 FAIL 为未配 key，预期）。
+- **全量包打包健壮性**：✅ 已修——`make_zip` + `robocopy` 双保险排除 HF 缓存垃圾
+  （`.locks`/`trees`/`.agent_harnesses.json`/`CACHEDIR.TAG`），保留模型
+  `blobs/`+`snapshots/`（验证 zip 内含 461MB model.bin）；顶层目录统一为
+  `F1Engineer/`；`FI.py --selftest` 依赖的 `tool_selftest.py` 已入包。
 
 ### 文档对齐（本轮）
 - 核心包不再 exclude sounddevice/numpy → 语音模式在核心包可用。

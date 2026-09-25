@@ -164,6 +164,83 @@ py -3.12 voice_main.py --list-audio
 
 ---
 
+## v2 主动工程师（持续观测 + 关键时刻主动呼叫）
+
+v2 把项目从"被动问答"升级为会主动提醒的工程师。核心原则不变：**数值全部本地
+计算，AI 只负责措辞**；主动播报**完全不调用 LLM**（零延迟、零成本、行为确定）。
+
+### 主动播报（voice 模式出声，网页模式只显示告警条）
+
+| 配置 | 说明 |
+|---|---|
+| `RADIO_ENABLE` | 总开关（默认开） |
+| `RADIO_VERBOSITY` | 话量：`minimal` / `normal` / `chatty`（默认 chatty） |
+| `RADIO_GATE_ENABLE` | 直道时机闸门：只在直道播报（默认开） |
+| `RADIO_QUIET_POLICY` | 安静模式：`in_game`（局内可切）/ `force_on` / `force_off` |
+| `RADIO_BEEP` / `RADIO_FILTER` | 无线电提示音 / 轻度滤波 |
+
+播报内容按优先级：**P0 安全**（安全车/红旗/引擎故障/罚时…，立即播、绕过闸门）、
+**P1 策略**（进站窗口/油量/轮胎寿命/降雨…，等直道）、**P2 信息**（位置变化/
+最快圈/差距…，等直道、过期丢弃）。**进站只报窗口和后果，绝不下指令。**
+
+**安静模式**：网页/语音里双击 PTT 键切换，或配置页设策略。`force_on/force_off`
+时局内切换无效并提示"当前由设置锁定"；局内切换只改内存、不写盘。
+
+### 推演层（race model）
+
+`race_model.py` 每拍本地计算：Stint 分段、磨损速率、配速衰退、与前后车的差距
+趋势（追近速率 / 预计几圈进入 1 秒）、进站窗口状态、降雨 ETA、排位/练习支撑。
+结果以 `snapshot["race_model"]` 供总结层与播报层读取，也经 `/api/state` 暴露。
+
+### 赛后复盘（纯本地 TXT，不调 LLM）
+
+过终点（方格旗 / 会话结束 / 最终成绩）且有圈数据时，自动写
+`DEBRIEF_DIR`（默认 `sessions/`）→ `debrief_YYYYMMDD_HHMMSS.txt`，含圈速表、
+每 stint 均值/衰退、稳定性、进站、关键事件、最终成绩。
+
+### 配置页（独立进程）
+
+```
+py -3.12 FI.py --config        # 浏览器打开 http://127.0.0.1:8766
+```
+可视化修改所有配置，写入 `.env`；运行中的进程自动热加载。密钥只回显末 4 位。
+
+### PTT 与车手名
+
+- **PTT 模式**：`PTT_MODE=hold`（按住说）/ `toggle`（按一下开始再按一下结束，默认）。
+- **触发键**：`PTT_BINDING`，格式 `kb:<vk>`（默认小键盘 +）或
+  `hid:VID:PID:byte:mask`（手柄/外设，见下方"输入源"）。
+- **车手名念法**：`DRIVER_NAME_STYLE=zh|en|number`（种子表 `data/driver_names.json`）。
+
+### TTS 后端
+
+`TTS_PROVIDER=auto|edge|sapi|piper|off`：
+- `edge`：神经音色，需联网、~30KB；
+- `sapi`：Windows 自带，零依赖（中文需系统中文语音包）；
+- `piper`：**完全离线**神经语音，需 `pip install "piper-tts[zh]"` 并下载模型
+  （`py -3.12 -m tools.download_piper_voice`），设 `TTS_PIPER_VOICE=<.onnx 路径>`。
+
+### 原始 UDP 录制 / 回放（离线调试）
+
+```
+py -3.12 -m tools.udp_record --port 20777 --out sessions\race.f1rec
+py -3.12 -m tools.replay sessions\race.f1rec --port 20777 --speed 2
+```
+
+### 输入源（键盘 / 手柄 / 方向盘）
+
+三种触发方式共享 `input_sources.py` 抽象，默认用键盘。手柄/外设的 Raw Input
+HID 偏移需实测（`py -3.12 -m tools.probe_dualsense`），详见 `KNOWN_ISSUES.md`
+的"输入触发方式"章节。改动面限制在 `input_sources.py` 一个文件，不影响主系统。
+
+### 自检
+
+```
+py -3.12 FI.py --selftest      # 依赖/资源/端口/音频/SAPI 音色/LLM 一并检查
+```
+
+---
+
 ## 网页 API
 
 网页面板（`run.py --web`）同时暴露一组 JSON 接口，方便脚本化或二次开发：

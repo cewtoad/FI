@@ -148,6 +148,10 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 | `webui.py` | 网页 UI：遥测面板 + 问答框 + 全场排名 + 导出按钮 |
 | `recorder.py` | 会话录制：每圈摘要 + 对话记录 → `sessions/*.json` |
 | `report_txt.py` | 人类可读 TXT 报告（圈速表 + 全场排名 + 对话） |
+| `speech.py` | 统一语音出口：SpeechArbiter + 非阻塞 AudioPlayer（v2） |
+| `radio_director.py` / `radio_rules.py` / `radio_templates.py` | 主动播报规则引擎（v2，无 LLM） |
+| `debrief.py` | 赛后复盘 TXT（v2，本地） |
+| `config_ui.py` | 独立配置页进程（v2，端口 8766） |
 
 ### 入口
 
@@ -190,6 +194,7 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 | **赛后复盘** | ✅ 本地 TXT（`debrief.py`，不调 LLM） |
 | **配置页** | ✅ 独立进程 `FI.py --config`（端口 8766） |
 | **原始包录制/回放** | ✅ `tools/udp_record.py` / `tools/replay.py`（`.f1rec`） |
+| **输入源抽象（键盘/手柄/方向盘）** | ✅ `input_sources.py` + `ptt_controller.py`；键盘已用，HID 待实测偏移 |
 | **可配置阈值** | ✅ `config_schema.py` 单一真源，热加载 |
 
 ### 规划中
