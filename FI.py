@@ -18,6 +18,18 @@ from __future__ import annotations
 import argparse
 import socket
 import sys
+
+
+def _force_utf8_stdout() -> None:
+    """Make stdout/stderr UTF-8 so Chinese/emoji never crash on a GBK console."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_force_utf8_stdout()
 import webbrowser
 
 

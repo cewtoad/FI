@@ -1,9 +1,8 @@
 @echo off
 chcp 65001 >nul
-title F1 Race Engineer
+title F1 Race Engineer - Voice
 cd /d "%~dp0"
 
-rem --- Pick a Python: embedded runtime first, then py launcher, then python ---
 set "PY="
 if exist "%~dp0python.exe" set "PY=%~dp0python.exe"
 if not defined PY (
@@ -18,9 +17,9 @@ if not defined PY (
     exit /b 1
 )
 
-rem Interactive launcher: choose 1) web panel or 2) voice mode.
-rem (PY may be a bare path or a launcher command with args, so don't quote it.)
-%PY% FI.py
+echo Starting VOICE mode... (press NUMPAD + in game to talk, Ctrl+C to quit)
+echo.
+%PY% FI.py --voice
 
 echo.
 echo Exited.
