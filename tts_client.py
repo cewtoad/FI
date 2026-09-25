@@ -131,6 +131,17 @@ class PiperTTS(TTSEngine):
         self.length_scale = _piper_length_scale(rate)
         self._piper = None
         self._voice_obj = None
+        # piper-tts lives in the bundled stt_lib/ (installed with --target), so
+        # add it to sys.path here the same way stt_client does for whisper.
+        try:
+            import sys as _sys
+
+            from paths import app_root
+            lib = app_root() / "stt_lib"
+            if lib.is_dir() and str(lib) not in _sys.path:
+                _sys.path.insert(0, str(lib))
+        except Exception:  # noqa: BLE001
+            pass
         try:
             import piper  # noqa: F401
             self._piper = piper

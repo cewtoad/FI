@@ -48,11 +48,21 @@ def fake_piper(monkeypatch, tmp_path):
     return mod, str(model)
 
 
-def test_piper_available_only_with_model(fake_piper):
+def test_piper_available_only_with_model(fake_piper, monkeypatch):
     _mod, model = fake_piper
     eng = PiperTTS(voice=model)
     assert eng.available is True
     assert eng.mime == "audio/wav"
+    # An unconfigured voice (env returns "") must be unavailable. Isolate from
+    # the developer's real .env via a stub config.
+    import config as config_mod
+    import tts_client
+
+    class _Cfg:
+        def get(self, key, default=""):
+            return default
+
+    monkeypatch.setattr(tts_client, "get_config", lambda: _Cfg())
     eng2 = PiperTTS(voice="")
     assert eng2.available is False
 
