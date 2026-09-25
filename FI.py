@@ -54,6 +54,34 @@ def _web_panel_running(web_port: int) -> bool:
         return False
 
 
+def _who_holds_udp_port(port: int) -> str:
+    """Best-effort: name the process holding a UDP port (Windows netstat)."""
+    try:
+        import subprocess
+        out = subprocess.run(["netstat", "-ano", "-p", "udp"],
+                             capture_output=True, timeout=8)
+        text = out.stdout.decode("utf-8", "replace")
+        owners = []
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[0].upper() == "UDP" and parts[1].endswith(f":{port}"):
+                pid = parts[-1]
+                name = pid
+                try:
+                    q = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                        capture_output=True, timeout=8)
+                    csv = q.stdout.decode("utf-8", "replace").strip()
+                    if csv and csv.startswith('"'):
+                        name = csv.split('","')[0].strip('"')
+                    owners.append(f"{name}(PID {pid})")
+                except Exception:
+                    owners.append(f"PID {pid}")
+        return ", ".join(sorted(set(owners)))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _require_port_free(udp_port: int, force: bool) -> bool:
     """Refuse to start when another receiver already holds the UDP port.
 
@@ -64,13 +92,19 @@ def _require_port_free(udp_port: int, force: bool) -> bool:
     """
     if force or not _port_busy(udp_port):
         return True
+    who = _who_holds_udp_port(udp_port)
     print("=" * 52)
     print(f"[!] UDP 端口 {udp_port} 已被占用。")
-    print("    F1 的遥测流同一时间只能被一个进程接收。常见原因：")
+    print("    F1 的遥测流同一时间只能被一个进程接收。")
+    if who:
+        print(f"    占用者: {who}")
+    print("    常见原因：")
     print("      · 你已经在跑另一个模式（网页/语音只能开一个）；")
-    print("      · SimHub / CrewChief 等工具也占用了该端口。")
+    print("      · SimHub / CrewChief 等遥测工具；")
+    print("      · 方向盘/外设的厂家软件（FanaLab / Moza Pit House /")
+    print("        Simagic / Thrustmaster 等）开了『屏幕遥测』功能。")
     print("    请先关闭它，再启动本程序。")
-    print(f"    （确定要强行启动可加 --force，但两个实例会互相抢包。）")
+    print("    （确定要强行启动可加 --force，但两个实例会互相抢包。）")
     print("=" * 52)
     return False
 
