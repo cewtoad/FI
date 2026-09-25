@@ -36,6 +36,29 @@ def test_build_app_voice_builds_arbiter_and_records():
     assert application.ticker is not None
 
 
+def test_voice_alert_sink_reaches_arbiter():
+    """T5.1: in voice mode, radio alerts must actually reach the SpeechArbiter.
+
+    Regression for an ordering bug: the radio director (and its sink) is built
+    before the arbiter, so a sink that captured app.speech at creation time was
+    always the web-style log sink and the radio never spoke.
+    """
+    import time
+
+    from contracts import Alert
+
+    application = build_app(port=0, recording=False, mode="voice", logger=None)
+    assert application.radio is not None and application.speech is not None
+    before = application.speech.stats()["queued"]
+    application.radio.sink(Alert(id="x", category="p0", priority=0,
+                                 text="安全车出动", created_at=time.monotonic()))
+    time.sleep(0.05)
+    after = application.speech.stats()["queued"]
+    # The utterance is queued (and may already be spoken by the pool).
+    assert after > before, "voice alert did not reach the arbiter"
+    application.speech.stop()
+
+
 def test_voice_main_routes_through_build_app():
     import voice_main
     src = inspect.getsource(voice_main)

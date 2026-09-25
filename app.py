@@ -230,14 +230,22 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
 
 
 def _make_alert_sink(app: "App", logger):
-    """Return a callable(Alert) -> None for the radio director (T5.1)."""
+    """Return a callable(Alert) -> None for the radio director (T5.1).
+
+    In voice mode the sink forwards alerts to the SpeechArbiter so they are
+    spoken; the arbiter is created *after* the radio director, so it is
+    resolved lazily at call time (not captured here).
+    """
     from contracts import PRIORITY_ANSWER
     mode = app.mode
 
-    if mode == "voice" and app.speech is not None:
+    if mode == "voice":
         def _voice_sink(alert):
+            speech = app.speech
+            if speech is None:
+                return
             from contracts import Utterance
-            app.speech.submit(Utterance(
+            speech.submit(Utterance(
                 text=alert.text, priority=alert.priority, source="rule",
                 created_at=alert.created_at, dedup_key=alert.dedup_key,
                 gated=(alert.priority > PRIORITY_ANSWER)))
