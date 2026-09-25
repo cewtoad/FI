@@ -91,6 +91,7 @@ def _require_port_free(udp_port: int, force: bool) -> bool:
     proceed.
     """
     if force or not _port_busy(udp_port):
+        print(f">>> 遥测接收端口: UDP {udp_port}")
         return True
     who = _who_holds_udp_port(udp_port)
     print("=" * 52)
@@ -103,17 +104,17 @@ def _require_port_free(udp_port: int, force: bool) -> bool:
     print("      · SimHub / CrewChief 等遥测工具；")
     print("      · 方向盘/外设的厂家软件（FanaLab / Moza Pit House /")
     print("        Simagic / Thrustmaster 等）开了『屏幕遥测』功能。")
-    print("    请先关闭它，再启动本程序。")
-    print("    （确定要强行启动可加 --force，但两个实例会互相抢包。）")
+    print()
+    print("    ── 想同时用（如 SimHub 做仪表 + 本程序做工程师）──")
+    print("    F1 UDP 只能一个进程直接收。做法是让占用者『转发』到另一端口：")
+    print("      · SimHub: Game → 打开 UDP Forward，把遥测转发到 20778；")
+    print("      · 本程序指定那个端口启动：")
+    print("          FI.py --port 20778 --voice   （或 --web）")
+    print("      · 网页/语音模式同样加 --port 20778。")
+    print()
+    print("    或先关闭占用者，再启动本程序（加 --force 可强开但会互相抢包）。")
     print("=" * 52)
     return False
-
-
-def _preflight(udp_port: int) -> None:
-    if _port_busy(udp_port):
-        print(f"⚠ 端口 {udp_port} 已被占用 —— 很可能是 SimHub / CrewChief 等"
-              f"也在收遥测。F1 的 UDP 流只能被一个程序接收，")
-        print("  请先关闭其他遥测工具，游戏数据才能被本程序收到。\n")
 
 
 def _open_browser_later(url: str) -> None:
@@ -134,7 +135,6 @@ def _run_web(port: int, web_port: int, open_browser: bool,
     from webui import serve
     if not _require_port_free(port, force):
         raise SystemExit(2)
-    _preflight(port)
     if open_browser:
         _open_browser_later(f"http://127.0.0.1:{web_port}")
     serve(port=port, web_port=web_port)
@@ -165,7 +165,6 @@ def _run_voice(port: int, argv: list, force: bool = False) -> None:
     import voice_main
     if not _require_port_free(port, force):
         raise SystemExit(2)
-    _preflight(port)
     if not _voice_deps_present():
         print("⚠ 未检测到本地语音依赖 (faster-whisper / sounddevice)。")
         print("   本程序仍会启动，但语音识别需改用云端：在 .env 设")
@@ -177,7 +176,6 @@ def _run_voice(port: int, argv: list, force: bool = False) -> None:
 
 
 def _ask_mode(port: int) -> str:
-    _preflight(port)
     print("=" * 46)
     print("  F1 Race Engineer")
     print("=" * 46)

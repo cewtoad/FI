@@ -66,7 +66,7 @@ def test_start_bat_is_ascii_and_exists():
 
 
 def test_udp_port_guard_blocks_second_instance():
-    """Only one process may receive the F1 UDP stream; a second must be refused.""" 
+    """Only one process may receive the F1 UDP stream; a second must be refused."""
     import socket
 
     import FI
@@ -80,6 +80,17 @@ def test_udp_port_guard_blocks_second_instance():
         assert FI._require_port_free(20801, force=True) is True
     finally:
         s.close()
+
+
+def test_fi_supports_port_and_force_flags():
+    import inspect
+
+    import FI
+    src = inspect.getsource(FI)
+    assert '"--port"' in src
+    assert '"--force"' in src
+    # forwarding guidance for the coexist case (SimHub forward -> our --port)
+    assert "转发" in src and "20778" in src
 
 
 def test_make_zip_drops_hf_cache_junk_keeps_model(tmp_path):
