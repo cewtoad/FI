@@ -175,7 +175,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "localhost only"})
             return
         path = urlparse(self.path).path
-        length = int(self.headers.get("Content-Length") or 0)
+        # Malformed Content-Length must not escape as an unhandled ValueError
+        # (ThreadingHTTPServer would drop the connection with no response), and
+        # an oversized body is rejected before it is read into memory.
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > 256 * 1024:
+            self._json(413, {"error": "body too large"})
+            return
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8"))

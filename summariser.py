@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from race_model import TYRE_WEAR_LIMIT_DEFAULT
+
 
 def _fmt_ms(ms: Optional[int]) -> str:
     if ms is None or ms <= 0:
@@ -83,6 +85,28 @@ class Summariser:
         except Exception:  # noqa: BLE001
             return self.HOT_TYRE_C
 
+    @property
+    def wear_limit_pct(self) -> float:
+        """Wear % considered high — same source as race_model's projected life.
+
+        One knob (``TYRE_WEAR_LIMIT_PCT``) drives both the radio's tyre-life
+        prediction and this note, so the two can never disagree.
+        """
+        try:
+            return float(self._cfg.get_float("TYRE_WEAR_LIMIT_PCT",
+                                             TYRE_WEAR_LIMIT_DEFAULT))
+        except Exception:  # noqa: BLE001
+            return TYRE_WEAR_LIMIT_DEFAULT
+
+    @property
+    def fuel_deficit_laps(self) -> float:
+        """Surplus-laps value below which fuel is called a deficit."""
+        try:
+            return float(self._cfg.get_float("RADIO_FUEL_DEFICIT_LAPS",
+                                             self.FUEL_DEFICIT_LAPS))
+        except Exception:  # noqa: BLE001
+            return self.FUEL_DEFICIT_LAPS
+
     def summarise(self, snap: Dict[str, Any]) -> Dict[str, Any]:
         latest = snap.get("latest", {})
         lap = latest.get("lap", {})
@@ -129,10 +153,18 @@ class Summariser:
 
         # Laps remaining (T1.2): only meaningful when the session has a lap
         # count. Includes the lap being driven (standard race-engineer usage:
-        # "5 laps to go" while on lap N of M means M-N+1).
+        # "5 laps to go" while on lap N of M means M-N+1). The race model's
+        # fuel.laps_to_end uses the SAME convention, so the LLM never sees two
+        # "laps left" numbers that disagree by one.
         if isinstance(total_laps, int) and total_laps > 0 \
                 and isinstance(current_lap, int) and current_lap > 0:
             facts["laps_remaining"] = max(0, total_laps - current_lap + 1)
+
+        # Rain probability as a flat fact: the local router answers
+        # "降雨概率多少" from it without falling through to the LLM.
+        s_meta = latest.get("session", {}) or {}
+        if s_meta.get("rain_percentage") is not None:
+            facts["rain_percentage"] = s_meta.get("rain_percentage")
 
         if fuel:
             facts["fuel_surplus_laps"] = fuel.get("surplus_laps")
@@ -277,7 +309,8 @@ class Summariser:
         out: List[str] = []
         surplus = fuel.get("surplus_laps")
         if isinstance(surplus, (int, float)):
-            if surplus < self.FUEL_DEFICIT_LAPS:
+            threshold = self.fuel_deficit_laps
+            if surplus < threshold:
                 out.append(f"油量不足: 按当前消耗完赛缺 {abs(surplus):.2f} 圈")
             elif surplus > 1.0:
                 out.append(f"油量富余: 可多用 {surplus:.2f} 圈，考虑推进")
@@ -346,11 +379,12 @@ class Summariser:
             out.append(f"车损严重: 最严重部件已损坏 {body}%")
         elif body is not None and body >= 20:
             out.append(f"有车损: 最严重部件 {body}%")
-        # Only mention tyre wear when meaningful.
+        # Only mention tyre wear when meaningful (same threshold the race
+        # model uses for projected tyre life).
         tw = [damage.get(k) for k in
               ("tyre_wear_fl", "tyre_wear_fr", "tyre_wear_rl", "tyre_wear_rr")]
         tw = [v for v in tw if v is not None]
-        if tw and max(tw) >= 70:
+        if tw and max(tw) >= self.wear_limit_pct:
             out.append(f"轮胎磨损偏高: 最高 {round(max(tw))}%")
         return out
 

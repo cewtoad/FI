@@ -66,6 +66,11 @@ class RaceModel:
         # GapTrend sample history keyed by target car index.
         self._ahead_samples: List[tuple] = []   # (lap, gap_ms, car_index)
         self._behind_samples: List[tuple] = []
+        # Pit-window latch: the game's pit_status is transient (NONE again once
+        # out of the pits), so "done" must be remembered across ticks until the
+        # window rotates to the next planned stop.
+        self._pit_window_id: Optional[tuple] = None
+        self._pit_window_stop0: Optional[int] = None
 
     # ---------------------------------------------------------------- config
 
@@ -103,8 +108,8 @@ class RaceModel:
             upto = max(int(s.get("lap_num") or 0) for s in samples)
 
         stint = self._compute_stint(samples)
-        ahead = self._compute_gap(samples, "ahead")
-        behind = self._compute_gap(samples, "behind")
+        ahead = self._compute_gap(samples, "ahead", session.get("total_laps"))
+        behind = self._compute_gap(samples, "behind", session.get("total_laps"))
         pit_window = self._compute_pit_window(session, lap)
         rain_eta = self._compute_rain_eta(session, self._rain_threshold())
 
@@ -117,14 +122,24 @@ class RaceModel:
         if isinstance(surplus, (int, float)) and session.get("total_laps"):
             cur = lap.get("current_lap_num")
             if isinstance(cur, int):
-                fuel_laps_left = max(0, session["total_laps"] - cur)
+                # Same laps-remaining convention as summariser.laps_remaining
+                # (total - cur + 1, includes the lap being driven): the LLM and
+                # radio templates must never see two "laps left" numbers that
+                # disagree by one.
+                fuel_laps_left = max(0, session["total_laps"] - cur + 1)
 
         field_best, pole = self._field_best(snap)
+        tt = latest.get("time_trial", {}) or {}
+        tt_pb = tt.get("personal_best_ms")
         flags = {
             "safety_car": (session.get("safety_car_status") or ""),
             "safety_car_active": _sc_active(session.get("safety_car_status")),
             "player_in_yellow_zone": self._player_in_yellow(snap, session),
             "session_time_left_s": session.get("session_time_left_s"),
+            # Persists the PB across ticks so the tt_new_pb rule can compare
+            # against the previous tick instead of announcing the first PB it
+            # ever sees as a "new record".
+            "tt_pb_ms": tt_pb if isinstance(tt_pb, int) and tt_pb > 0 else None,
         }
         return RaceModelState(
             upto_lap=upto,
@@ -221,7 +236,7 @@ class RaceModel:
     # ---------------------------------------------------------------- gaps
 
     def _compute_gap(self, samples: List[Dict[str, Any]],
-                     side: str) -> Optional[GapTrend]:
+                     side: str, max_laps: Any = None) -> Optional[GapTrend]:
         gap_key = f"gap_{side}_ms"
         idx_key = f"{side}_index"
         # Anchor on the CURRENT opponent (latest sample with data) and keep
@@ -252,6 +267,11 @@ class RaceModel:
         laps_to_1s = None
         if slope < 0 and last_gap > 1000:
             laps_to_1s = (last_gap - 1000) / (-slope)
+            # A near-zero negative slope (pure noise) must not produce an
+            # absurd "catch up in 40000 laps" number for the LLM/radio.
+            cap = float(max_laps) if isinstance(max_laps, (int, float)) \
+                and max_laps > 0 else 100.0
+            laps_to_1s = min(laps_to_1s, cap)
         return GapTrend(target_index=int(car_index), gap_ms_now=last_gap,
                         closing_rate_ms_per_lap=round(slope, 1),
                         laps_to_1s=(round(laps_to_1s, 1) if laps_to_1s is not None
@@ -264,8 +284,15 @@ class RaceModel:
         latest = session.get("pit_window_latest_lap")
         rejoin = session.get("pit_window_rejoin_position")
         cur = lap.get("current_lap_num")
+        stops = lap.get("num_pit_stops")
         st = "unknown"
         if isinstance(ideal, int) and isinstance(cur, int) and ideal > 0:
+            window_id = (ideal, latest)
+            if window_id != self._pit_window_id:
+                # Window rotated (next planned stop) or session changed:
+                # re-arm the done-latch on the current stop count.
+                self._pit_window_id = window_id
+                self._pit_window_stop0 = stops if isinstance(stops, int) else None
             if cur < ideal:
                 st = "not_open"
             elif isinstance(latest, int) and cur > latest:
@@ -275,7 +302,15 @@ class RaceModel:
             else:
                 st = "open"
             # pit_status lives in latest.lap (state.py _on_lap_data), not status.
+            # It is transient — NONE again right after the stop — so "done"
+            # must also latch on a completed stop: otherwise the state regresses
+            # to open/missed the next lap and the radio re-announces a window
+            # that was already used.
             if lap.get("pit_status") not in (None, "NONE") and cur >= ideal:
+                st = "done"
+            elif (isinstance(stops, int) and stops > 0
+                  and self._pit_window_stop0 is not None
+                  and stops > self._pit_window_stop0):
                 st = "done"
         return PitWindow(state=st,
                          ideal_lap=ideal if isinstance(ideal, int) else 0,

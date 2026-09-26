@@ -24,9 +24,8 @@ from config import get_config
 from engineer import Engineer
 from llm_client import LLMError, make_llm
 from profiles import PROFILES
-from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
+from receiver import TelemetryReceiver
 from recorder import SessionRecorder
-from state import TelemetryState
 from summariser import Summariser
 from voice import VoiceLink
 
@@ -751,7 +750,13 @@ class _Handler(BaseHTTPRequestHandler):
             return
         audio = self.rfile.read(length)
         mime = (self.headers.get("Content-Type") or "audio/webm").split(";")[0].strip()
-        result = voice.process(audio, mime)
+        try:
+            result = voice.process(audio, mime)
+        except Exception as e:  # noqa: BLE001 - answer the client, not a dropped conn
+            logging.getLogger("f1_tr.web").warning("voice.process failed: %r", e)
+            self._send(500, json.dumps({"error": f"voice failed: {e}"}).encode("utf-8"),
+                       "application/json; charset=utf-8")
+            return
         # Persist the Q&A turn exactly like /api/ask does.
         if result.get("question") is not None and result.get("answer") is not None:
             try:
@@ -766,7 +771,7 @@ class _Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8")
 
 
-def _receiver_thread(state: TelemetryState, receiver: TelemetryReceiver, logger) -> None:
+def _receiver_thread(receiver: TelemetryReceiver, logger) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -788,7 +793,7 @@ def serve(port: int = 20777, web_port: int = 8765,
     app.extras["voice"] = voice
 
     t = threading.Thread(target=_receiver_thread,
-                         args=(app.state, app.receiver, logger), daemon=True)
+                         args=(app.receiver, logger), daemon=True)
     t.start()
     # T3.8: run the ticker (race model + radio director) in web mode too; the
     # web path has no speech arbiter, so alerts go to the in-memory AlertLog.

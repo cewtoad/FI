@@ -78,6 +78,10 @@ class SessionRecorder:
                 "pit_status": lap_now.get("pit_status"),
                 "num_pit_stops": lap_now.get("num_pit_stops"),
                 "pit_limiter": latest.get("status", {}).get("pit_limiter"),
+                # 2026 regs have no DRS (Active Aero instead): lets the TXT
+                # report suppress the raw DRS-fault flag there.
+                "regulations_2026": bool(
+                    (latest.get("car2", {}) or {}).get("regulations_2026")),
             }
 
         hist = latest.get("history", {})

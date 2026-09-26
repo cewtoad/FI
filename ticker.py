@@ -83,5 +83,14 @@ class Ticker:
             self._thread = None
 
     def stats(self) -> dict:
-        return {"ticks": self.ticks, "errors": dict(self.errors),
+        # run_once (ticker thread) inserts error keys while HTTP readers copy
+        # the dict; keys are a bounded set, so a bounded retry always converges.
+        errors = {}
+        for _ in range(3):
+            try:
+                errors = dict(self.errors)
+                break
+            except RuntimeError:
+                continue
+        return {"ticks": self.ticks, "errors": errors,
                 "last_beat_ms": self.last_beat_ms}

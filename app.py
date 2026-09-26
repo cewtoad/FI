@@ -58,8 +58,11 @@ class App:
         if self.speech is not None:
             try:
                 self.speech.start()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                # Previously swallowed silently: voice mode would run with no
+                # speech output and zero clues. Log it.
+                logging.getLogger("f1_tr").warning(
+                    "speech arbiter failed to start: %r", e)
         if self.ticker is not None:
             self.ticker.start()
 
@@ -119,6 +122,7 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
     # come from SESSION_HISTORY anyway, which the 2Hz beat picks up.)
     record_hz = 2.0
     last_record = [0.0]
+    record_errors = [0]
 
     def _on_packet(packet: Any) -> None:
         if recorder is None:
@@ -129,8 +133,13 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
         last_record[0] = now
         try:
             recorder.record_state(state.snapshot())
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - never break the receive path
+            # Counted and surfaced at a low rate: a persistently failing
+            # recorder must be diagnosable without spamming the RX log.
+            record_errors[0] += 1
+            if record_errors[0] <= 3 or record_errors[0] % 50 == 0:
+                logger.warning("recorder.record_state failed (%d): %r",
+                               record_errors[0], e)
 
     receiver = TelemetryReceiver(
         state, port=port, bind_ip=bind_ip,
@@ -210,7 +219,11 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
     # One handler per stage so the ticker's per-handler isolation/counters
     # apply (a radio failure must not skip the debrief, and vice versa).
     def _reload(snapshot: dict, now: float) -> None:
-        get_config().reload_if_changed()
+        if get_config().reload_if_changed() and app.engineer is not None:
+            # The config page is a separate process: after it rewrites .env,
+            # rebuild the cached LLM client so fallback/timeout edits hot-apply
+            # instead of staying pinned at the old construction-time values.
+            app.engineer.refresh_client()
 
     def _radio(snapshot: dict, now: float) -> None:
         if app.radio is None:

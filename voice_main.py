@@ -23,8 +23,7 @@ from typing import Optional
 import audio
 from app import build_app
 from engineer import Engineer
-from receiver import DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver
-from state import TelemetryState
+from receiver import DEFAULT_PORT
 from stt_client import make_stt
 from voice_stt import StreamingRecorder
 from voice_trigger import RawKeyTrigger, TRIGGER_VK
@@ -62,7 +61,6 @@ class VoiceApp:
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
         self.trigger: Optional[RawKeyTrigger] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # T6.2: PTT state machine driven by config (hold/toggle + double-tap).
         from config import get_config
         from ptt_controller import PTTController
@@ -76,7 +74,6 @@ class VoiceApp:
     def _run_receiver(self) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        self._loop = loop
         try:
             loop.run_until_complete(self.receiver.run())
         except Exception as e:  # noqa: BLE001

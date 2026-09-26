@@ -2,6 +2,37 @@
 
 > 记录测试中发现但暂未修复的问题，供后续处理。
 
+## 审查第二轮修复（2026-09-27，全量 pytest 199 passed / 4 skipped）
+
+### 严重（4）
+- **S1 `speech.py`**：播报线程 `_run` 全程无异常隔离，一条损坏 WAV 就永久杀死唯一工作线程（radio 整体哑掉）→ pop 后整段包 try/except + 计数；`_emit` 捕获放宽到 Exception。合成池由 FIFO `ThreadPoolExecutor` 改为**优先级感知的 daemon 线程**（P0 不再排在两条长合成后面；Piper 挂死不再卡进程退出）。
+- **S2 `state.py`**：包流期间 dirty 恒真，每个 HTTP/语音读者都 force 全量 deepcopy（持 `_state_lock`），读者越多 RX 丢包越多 → 读者仅在**无发布者新鲜副本**时才按需重建（发布者 2Hz 活跃时直接复用冻结件），并加 `_build_lock` 单飞。附带：快照 events 窗口 6→24、flashback 后重置位置基线（修假"掉位"事件）、`_reset_for_new_session` 清 `packet_errors`、直道阈值 60Hz→5s 缓存、snapshot provider 契约文档修正。
+- **S3 `radio_director.py`**：跨会话状态从不重置——第二场 `_last_event_seq` 残留旧值，**安全车/红旗/罚时/超车等事件规则整场失效** → tick 检测 `session_uid` 变化即清 `_fired_keys/_last_fired/_last_event_seq/_prev_model` 等。
+- **S4 `race_model.py`**：PitWindow "done" 只由瞬态 pit_status 支撑，进站后回退成 open/missed 假警报 → 用 `num_pit_stops` 增量把 done 闩锁到窗口轮转。
+
+### 中（其余）
+- `.bat`×5：嵌入式 python 路径含空格时双击即失败 → 嵌入路径单独加引号分支。
+- `config_schema.validate`：str 值不滤换行（可向 .env 注入任意键）→ 拒绝换行+剥控制字符；NaN 穿透范围校验 → `isfinite` 拒绝；`int(inf)` 的 OverflowError 逃逸 → 并入 except；`PTT_BINDING` 接入格式校验（与 `parse_binding` 同语义）。
+- `config.py`：`_persist` 读+合并移进锁内（并发写不再互相丢键）；热加载 overlay 逐出改按 **file-only keys** 判定（不再被 os.environ 遮蔽回退）。
+- 圈数口径统一：`race_model.fuel_laps_left` 改为 `total-cur+1`（与 summariser `laps_remaining` 同源，LLM 不再看到差 1 的两个"剩余圈数"）。
+- 播报 dedup key 修复复发漏播：fastest_lap_you 按 seq、tyre_critical/attention 按 stint、wrong_way/undercut 按圈、rain_incoming 按 ETA、unserved_penalty 按次数。
+- `_rule_tt_new_pb`：`tt_pb_ms` 由 race_model flags 持久化，首拍见到的 PB 不再误报"新纪录"。
+- 2026 漏网 DRS：`_rule_drs_fault` 与 `report_txt` 按 `regulations_2026` 屏蔽（recorder 补记该标志）。
+- `debrief.py`：写失败不再永久跳过（成功后才置位）；无 session_uid 的会话也能写复盘。
+- `llm_client.FallbackLLM`：回退也失败时带上 primary 的错误（429 详情等）。
+- `ptt_controller.on_release`：无前置 press（reset 后残留）不再误开始录音。
+- `RADIO_GAP_EVERY_N<=0` 视为静音（原先退化成每圈播）；`laps_to_1s` 按总圈数钳制（噪声斜率不再输出几万圈）。
+- 阈值同源：磨损阈值统一走 `TYRE_WEAR_LIMIT_PCT`；缺油阈值新增 `RADIO_FUEL_DEFICIT_LAPS`。
+- `engineer.cancel()` 修复为真实生效（LLM 调用前后检查）；`app._reload` 在 .env 变化后 `refresh_client()`，备用端点/超时配置现在热生效。
+
+### 轻（清理）
+- 吞异常补限频日志+计数：receiver 快照刷新、state provider、app recorder/speech 启动。
+- stats 计数 dict 拷贝竞态（receiver/ticker）加有界重试。
+- webui：`/api/ask_voice` 外层兜底返回 500；`_receiver_thread` 死参数、未用导入清理。
+- 死代码删除：`speech._priority_bucket`、`profiles._route_rival_pace`、`FI._web_panel_running`、`config.as_dict`、`build_manifest.EXCLUDE_*`；`input_sources` on_tap 失真注释修正；`profiles._route_weather` 补 `rain_percentage` fact（summariser 现在产出）。
+- 其余：`audio.py` 设备提示 `or` 优先级、FI netstat/tasklist 按 ANSI 代码页解码、config_ui Content-Length 容错+256KB 上限、build_manifest 白名单缺文件告警。
+- 补 20 条回归测试（`tests/test_review2_fixes.py`，含 webui 护栏 403×2 与 `_local_only` 直测）。
+
 ## 已修复
 
 ### ✅ ISSUE-4：领先/落后的方向可能反了 —— 已定位并修复

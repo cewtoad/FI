@@ -106,8 +106,12 @@ def render(data: Dict[str, Any]) -> str:
         L("  车损 (%):")
         L(f"    前翼左 {dmg.get('front_left_wing')}  前翼右 {dmg.get('front_right_wing')}  "
           f"尾翼 {dmg.get('rear_wing')}  底板 {dmg.get('floor')}  侧箱 {dmg.get('sidepod')}")
+        # T1.5: under 2026 regs DRS does not exist (Active Aero instead) —
+        # don't display a raw DRS-fault flag there.
+        regs_2026 = bool(vs.get("regulations_2026"))
+        drs_txt = "-" if regs_2026 else ("是" if dmg.get("drs_fault") else "否")
         L(f"    引擎 {dmg.get('engine')}  变速箱 {dmg.get('gearbox')}  "
-          f"DRS故障 {'是' if dmg.get('drs_fault') else '否'}  "
+          f"DRS故障 {drs_txt}  "
           f"ERS故障 {'是' if dmg.get('ers_fault') else '否'}")
         L("  轮胎磨损 (%):")
         L(f"    FL {_r(dmg.get('tyre_wear_fl'))}  FR {_r(dmg.get('tyre_wear_fr'))}  "

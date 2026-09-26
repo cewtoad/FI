@@ -56,6 +56,11 @@ class PTTController:
 
     def on_release(self) -> PttAction:
         now = self._clock()
+        if not self._pressed:
+            # A release with no preceding press (or one arriving after
+            # reset()): in toggle mode the duration below would compute as 0.0
+            # — a "fast tap" — and silently START a recording out of nowhere.
+            return PttAction("none", now)
         duration = (now - self._press_at) if self._press_at is not None else 0.0
         self._pressed = False
         self._press_at = None

@@ -20,7 +20,13 @@ if not defined PY (
     exit /b 1
 )
 
-%PY% FI.py
+rem Quoted embedded runtime: a pack path with spaces (C:\Users\John S\) would
+rem otherwise be split by cmd and the launch would fail for first-time users.
+if exist "%~dp0python.exe" (
+    "%~dp0python.exe" FI.py
+) else (
+    %PY% FI.py
+)
 
 echo.
 echo Exited.

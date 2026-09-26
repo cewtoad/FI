@@ -77,11 +77,9 @@ def build_text(snapshot: Dict[str, Any], race_model: Optional[Dict[str, Any]] = 
         lines.append("-- 汇总 --")
         lines.append(f"  最快圈: {_fmt_ms(best)}")
         lines.append(f"  平均圈: {_fmt_ms(int(sum(times) / len(times)))}")
-        try:
-            sd = statistics.pstdev(times)
-            lines.append(f"  稳定性(std): {sd/1000:.3f}s")
-        except Exception:
-            pass
+        # ``valid`` is non-empty here, so pstdev cannot raise; no try/except.
+        sd = statistics.pstdev(times)
+        lines.append(f"  稳定性(std): {sd/1000:.3f}s")
         lines.append("")
 
     lines.append("-- 分段(stint) --")
@@ -128,6 +126,7 @@ class DebriefWriter:
         self._cfg = config
         self._log = logger or _log
         self._written_for_uid = None
+        self._written_without_uid = False
         self.last_path: Optional[str] = None
 
     def _dir(self) -> Path:
@@ -163,13 +162,23 @@ class DebriefWriter:
         if not (ended or has_fc):
             return
         uid = (snapshot.get("session", {}) or {}).get("session_uid")
-        if uid == self._written_for_uid:
+        if uid is None:
+            if self._written_without_uid:
+                return
+        elif uid == self._written_for_uid:
             return
-        self._written_for_uid = uid
         try:
             self.write(snapshot)
         except Exception as e:  # noqa: BLE001 - a debrief failure must not crash
             self._log.warning("debrief write failed: %r", e)
+            return
+        # Mark written only AFTER a successful write: the end condition
+        # persists in the snapshot stream, so a failed write is retried on a
+        # later tick instead of being silently lost for the whole session.
+        if uid is None:
+            self._written_without_uid = True
+        else:
+            self._written_for_uid = uid
 
     def write(self, snapshot: Dict[str, Any]) -> Path:
         out_dir = self._dir()

@@ -155,15 +155,31 @@ class TelemetryReceiver:
         # readers on other threads never touch the live, mutating structures.
         try:
             self.state.refresh_snapshot()
-        except Exception:  # noqa: BLE001 - a snapshot failure must not stop RX
-            pass
+        except Exception as e:  # noqa: BLE001 - a snapshot failure must not stop RX
+            # But it must not be invisible either: a persistently failing
+            # refresh means every reader rebuilds on demand (slower, and the
+            # UI can silently go stale). Surface it at a low rate.
+            self.snapshot_errors = getattr(self, "snapshot_errors", 0) + 1
+            if self.snapshot_errors <= 3 or self.snapshot_errors % 50 == 0:
+                self.logger.warning("snapshot refresh failed (%d): %r",
+                                    self.snapshot_errors, e)
         if self.on_packet is not None:
             self.on_packet(packet)
 
     def stats(self) -> dict:
+        # The RX thread inserts new drop reasons while HTTP readers copy the
+        # dict; a size change mid-copy raises RuntimeError. Keys are a bounded
+        # set, so a bounded retry always converges.
+        reasons = {}
+        for _ in range(3):
+            try:
+                reasons = dict(self.drop_reasons)
+                break
+            except RuntimeError:
+                continue
         return {
             "accepted": self.frames,
             "dropped_unparsed": self.dropped_unparsed,
             "dropped_gate": self.dropped_gate,
-            "drop_reasons": dict(self.drop_reasons),
+            "drop_reasons": reasons,
         }

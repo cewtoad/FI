@@ -108,8 +108,10 @@ def test_rain_eta_and_field_best():
 def test_fuel_laps_left():
     m = RaceModel()
     m.update(_snap([_lap(1)], cur=10, surplus=2.0), now=0.0)
-    # total 50 - cur 10 = 40
-    assert m.latest.fuel_laps_left == 40
+    # total 50 - cur 10 + 1 = 41: the SAME laps-remaining convention as the
+    # summariser's facts.laps_remaining (includes the lap being driven), so
+    # the LLM never sees two "laps left" numbers that disagree by one.
+    assert m.latest.fuel_laps_left == 41
 
 
 def test_update_is_under_2ms():

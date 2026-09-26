@@ -21,7 +21,12 @@ if not defined PY (
 echo Starting VOICE mode... (press NUMPAD + in game to talk, Ctrl+C to quit)
 echo NOTE: run ONLY one mode at a time (web OR voice), or they fight over UDP.
 echo.
-%PY% FI.py --voice
+rem Quoted embedded runtime: a pack path with spaces would break the launch.
+if exist "%~dp0python.exe" (
+    "%~dp0python.exe" FI.py --voice
+) else (
+    %PY% FI.py --voice
+)
 
 echo.
 echo Exited.

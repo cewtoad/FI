@@ -83,10 +83,10 @@ class InputSource:
                 self.on_press()
 
     def _emit_release(self) -> None:
-        # NOTE: do NOT also fire on_tap here. voice_trigger.RawKeyTrigger already
-        # emits press+release then its own tap, and a caller that passes both
-        # on_release and on_tap would run its action twice (the "release
-        # double-fired" bug fixed for voice_main). Tap is opt-in via the trigger.
+        # NOTE: do NOT also fire on_tap here. voice_trigger.RawKeyTrigger fires
+        # tap as its own callback; a caller that passed both on_release and
+        # on_tap used to run its action twice (the "release double-fired" bug
+        # fixed for voice_main, which now consumes press/release only).
         if self._pressed:
             self._pressed = False
             if self.on_release:
@@ -110,8 +110,9 @@ class KeyboardSource(InputSource):
         self._emit_release()
 
     def _tap(self):
-        # RawKeyTrigger already fired press+release; the base _emit_release
-        # fired on_tap, so nothing else to do here.
+        # RawKeyTrigger fires tap as its OWN callback (not via _emit_release,
+        # which only ever fires on_release — the "release double-fired" bug).
+        # PTT consumes press/release only, so tap is deliberately unused here.
         pass
 
     def start(self) -> None:

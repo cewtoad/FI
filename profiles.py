@@ -222,15 +222,6 @@ def _route_weather(facts, q):
     return None
 
 
-def _route_rival_pace(facts, q):
-    # The leaderboard-based rival lookup needs the raw rows; handled in the
-    # engineer via a dedicated path. Here we expose the field best.
-    fb = _fmt_fact(facts, "qualifying.field_best")
-    if fb:
-        return f"全场最快圈 {fb}"
-    return None
-
-
 # Ordered intent table: (regex, handler, label). First match wins.
 _ROUTES: List[tuple] = [
     (re.compile(r"前车|前面|前方|追逐"), _route_car_ahead, "car_ahead"),

@@ -20,7 +20,12 @@ if not defined PY (
 echo Starting WEB mode... (browser will open http://127.0.0.1:8765)
 echo NOTE: run ONLY one mode at a time (web OR voice), or they fight over UDP.
 echo.
-%PY% FI.py --web
+rem Quoted embedded runtime: a pack path with spaces would break the launch.
+if exist "%~dp0python.exe" (
+    "%~dp0python.exe" FI.py --web
+) else (
+    %PY% FI.py --web
+)
 
 echo.
 echo Exited.

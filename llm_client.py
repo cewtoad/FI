@@ -195,7 +195,14 @@ class FallbackLLM:
             if not (e.retryable and self.fallback.configured):
                 raise
             self.last_fallback_from = self.primary.base_url
-            answer = self.fallback.chat(messages, temperature, max_tokens)
+            try:
+                answer = self.fallback.chat(messages, temperature, max_tokens)
+            except LLMError as e2:
+                # Surface BOTH endpoints: when the fallback also fails, the
+                # primary's cause (429 detail, timeout, ...) used to vanish,
+                # making the outage undiagnosable.
+                raise LLMError(f"primary: {e}; fallback: {e2}",
+                               retryable=e2.retryable) from e2
             self.last_usage = self.fallback.last_usage
             return answer
 

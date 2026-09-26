@@ -16,6 +16,10 @@ from contracts import (Alert, PRIORITY_P0, PRIORITY_P1, PRIORITY_P2)
 
 import radio_templates as T
 
+# Shared with the summariser's fuel note via config (RADIO_FUEL_DEFICIT_LAPS);
+# the literal here is only the fallback when config is unavailable.
+FUEL_DEFICIT_LAPS = -0.2
+
 
 @dataclass
 class RuleCtx:
@@ -151,8 +155,12 @@ def _rule_major_damage(ctx: RuleCtx) -> Optional[Alert]:
 
 def _rule_drs_fault(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["drs_fault"]
-    damage = (ctx.snapshot.get("latest", {}) or {}).get("damage", {}) or {}
-    if damage.get("drs_fault"):
+    latest = (ctx.snapshot.get("latest", {}) or {})
+    # T1.5: under 2026 regs there is no DRS (Active Aero/Overtake instead) —
+    # the damage flag can still arrive from old recordings/fixtures.
+    if bool((latest.get("car2", {}) or {}).get("regulations_2026")):
+        return None
+    if (latest.get("damage", {}) or {}).get("drs_fault"):
         return _alert(rule, T.render("drs_fault"), ctx.now, "drs_fault")
     return None
 
@@ -169,7 +177,10 @@ def _rule_wrong_way(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["wrong_way"]
     car2 = (ctx.snapshot.get("latest", {}) or {}).get("car2", {}) or {}
     if car2.get("driving_wrong_way"):
-        return _alert(rule, T.render("wrong_way"), ctx.now, "wrong_way")
+        # Lap-scoped: a second wrong-way episode later in the race must warn
+        # again, while the persistent condition within one lap stays quiet.
+        return _alert(rule, T.render("wrong_way"), ctx.now,
+                      _lap_key(ctx, "wrong_way"))
     return None
 
 
@@ -242,7 +253,14 @@ def _rule_pit_sc_opportunity(ctx: RuleCtx) -> Optional[Alert]:
 def _rule_fuel_deficit(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["fuel_deficit"]
     surplus = (ctx.snapshot.get("fuel") or {}).get("surplus_laps")
-    if isinstance(surplus, (int, float)) and surplus < -0.2:
+    threshold = FUEL_DEFICIT_LAPS
+    if ctx.settings is not None:
+        try:
+            threshold = ctx.settings.get_float("RADIO_FUEL_DEFICIT_LAPS",
+                                               FUEL_DEFICIT_LAPS)
+        except Exception:
+            pass
+    if isinstance(surplus, (int, float)) and surplus < threshold:
         return _alert(rule, T.render("fuel_deficit", laps=abs(surplus)), ctx.now,
                       "fuel_deficit")
     return None
@@ -254,8 +272,11 @@ def _rule_tyre_critical(ctx: RuleCtx) -> Optional[Alert]:
     if laps is None:
         return None
     if laps <= 3:
+        # Stint-scoped: a fresh set crossing the limit again must warn again.
+        stint = ctx.curr.stint
+        scope = stint.index if stint is not None else "x"
         return _alert(rule, T.render("tyre_critical", laps=laps), ctx.now,
-                      "tyre_critical")
+                      f"tyre_critical_{scope}")
     return None
 
 
@@ -264,8 +285,10 @@ def _rule_tyre_attention(ctx: RuleCtx) -> Optional[Alert]:
     laps = ctx.curr.tyre_laps_to_limit
     if laps is None or laps > 5 or laps <= 3:
         return None
+    stint = ctx.curr.stint
+    scope = stint.index if stint is not None else "x"
     return _alert(rule, T.render("tyre_attention", laps=laps), ctx.now,
-                  "tyre_attention")
+                  f"tyre_attention_{scope}")
 
 
 def _rule_rain_incoming(ctx: RuleCtx) -> Optional[Alert]:
@@ -285,8 +308,10 @@ def _rule_rain_incoming(ctx: RuleCtx) -> Optional[Alert]:
         pass
     if pct < threshold:
         return None
+    # ETA-scoped: a revised forecast (new ETA) is worth a second heads-up,
+    # while the same ETA stays quiet.
     return _alert(rule, T.render("rain_incoming", eta=eta, pct=int(pct)), ctx.now,
-                  "rain_incoming")
+                  f"rain_incoming_{eta}")
 
 
 def _rule_track_limits_warning(ctx: RuleCtx) -> Optional[Alert]:
@@ -306,8 +331,10 @@ def _rule_unserved_penalty(ctx: RuleCtx) -> Optional[Alert]:
     sg = lap.get("num_unserved_sg_pens") or 0
     if dt or sg:
         kind = "停走" if sg else "通过"
+        # Count-scoped: a second unserved penalty while one is pending must
+        # alert again (the old fixed key stayed silent for the whole session).
         return _alert(rule, T.render("unserved_penalty", kind=kind), ctx.now,
-                      f"unserved_{kind}")
+                      f"unserved_{kind}_{dt + sg}")
     return None
 
 
@@ -327,8 +354,10 @@ def _rule_undercut_risk(ctx: RuleCtx) -> Optional[Alert]:
             # Use the leaderboard's driver name instead of the empty participant
             # map, which always degraded to "carN".
             name = r.get("driver") or ctx.names.name_from_index(behind.target_index, {})
+            # Lap-scoped: a rival pitting again later (another stint, another
+            # rival) must re-flag the risk.
             return _alert(rule, T.render("undercut_risk", name=name), ctx.now,
-                          "undercut_risk")
+                          _lap_key(ctx, "undercut_risk"))
     return None
 
 
@@ -357,8 +386,10 @@ def _rule_fastest_lap_you(ctx: RuleCtx) -> Optional[Alert]:
         if ev.get("kind") == "fastest_lap" and ev.get("is_player"):
             ms = ev.get("lap_time_ms")
             t = _fmt_ms(ms)
+            # Seq-scoped: a second personal fastest lap later in the race must
+            # be announced too (the fixed key fired once per session).
             return _alert(rule, T.render("fastest_lap_you", time=t), ctx.now,
-                          "fastest_lap_you")
+                          f"fastest_lap_{ev.get('seq')}")
     return None
 
 
@@ -414,7 +445,8 @@ def _rule_gap_report(ctx: RuleCtx) -> Optional[Alert]:
             n = ctx.settings.get_int("RADIO_GAP_EVERY_N", 3)
         except Exception:
             n = 3
-        if not isinstance(cur, int) or (n and cur % n != 0):
+        if not isinstance(cur, int) or n <= 0 or cur % n != 0:
+            # n <= 0 means "silence", not the every-lap it used to degenerate to.
             return None
     text = T.render("gap_report",
                     ahead=_fmt_gap(ahead.gap_ms_now) if ahead else "-",
@@ -500,7 +532,10 @@ def _rule_tt_new_pb(ctx: RuleCtx) -> Optional[Alert]:
     prev_best = None
     if ctx.prev is not None and isinstance(ctx.prev.flags, dict):
         prev_best = ctx.prev.flags.get("tt_pb_ms")
-    if isinstance(pb, int) and pb > 0 and (prev_best is None or pb < prev_best):
+    # Announce only an IMPROVEMENT over the previously seen PB: the first PB
+    # observed in a session is the baseline, not a new record (the old code
+    # announced the existing PB on the very first tick).
+    if isinstance(pb, int) and pb > 0 and prev_best is not None and pb < prev_best:
         return _alert(rule, T.render("tt_new_pb", time=_fmt_ms(pb)), ctx.now,
                       f"tt_pb_{pb}")
     return None

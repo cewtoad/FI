@@ -101,16 +101,14 @@ OPTIONAL_RESOURCE_DIRS = ["piper_models"]
 # Static files copied into the full pack.
 STATIC_FILES = [".env.example", "README.md", "LICENSE", "FIRST_RUN.txt", "start.bat"]
 
-# Names never copied into the full pack.
-EXCLUDE_PREFIXES = (
-    "test_", "tests_", "bench_", "capture", "probe_", "tool_",
-    "fake_data", "build_", "download_stt_model",
-)
-EXCLUDE_DIRS = {
-    "tests", "tools", "build_lib", "dist", "build", "sessions",
-    "__pycache__", "stt_lib", "stt_models", "python-embed", "png_src",
-    ".git", ".github", ".pytest_cache",
-}
+
+def missing_modules() -> list:
+    """Whitelist entries not on disk.
+
+    iter_modules() silently skips them; a typo'd name in RUNTIME_MODULES would
+    otherwise ship a pack with that module quietly missing.
+    """
+    return [name for name in RUNTIME_MODULES if not (ROOT / name).exists()]
 
 
 def iter_modules():
@@ -183,6 +181,12 @@ def main() -> int:
     full = sub.add_parser("full-copy")
     full.add_argument("--dest", required=True)
     args = p.parse_args()
+
+    missing = missing_modules()
+    if missing:
+        # A typo'd whitelist name must not silently ship a pack without it.
+        print(f"WARNING: manifest whitelist entries missing on disk: {missing}",
+              file=sys.stderr)
 
     if args.cmd == "list":
         for name in iter_modules():

@@ -137,6 +137,15 @@ class TelemetryState:
         # dirty (i.e. almost always while packets flow), so without this lock
         # readers deep-copy dicts/deques the RX thread is mutating.
         self._state_lock = threading.RLock()
+        # Single-flight for reader-triggered rebuilds: N concurrent readers
+        # behind a stale snapshot must produce ONE rebuild, not N (each one
+        # deep-copies everything under _state_lock and stalls the RX loop).
+        self._build_lock = threading.Lock()
+        # Last time the receiver path refreshed the snapshot (non-force). While
+        # it is recent, readers reuse the frozen copy instead of rebuilding.
+        self._publisher_at: float = 0.0
+        # Cached straight-gate thresholds (see _straight_thresholds).
+        self._straight_cfg: Optional[tuple] = None
         self._frozen: Dict[str, Any] = {}
         self._frozen_at: float = 0.0
         self._snap_dirty: bool = True
@@ -147,8 +156,10 @@ class TelemetryState:
     def add_snapshot_provider(self, fn: Callable[[], Dict[str, Any]]) -> None:
         """Register a provider merged into every snapshot (T3.8).
 
-        The provider is called under no lock; it must return a plain dict and
-        do its own internal locking (the race model does).
+        Providers run inside snapshot builds, i.e. while ``_state_lock`` is
+        held on the receiving thread's path: they must be pure in-memory reads
+        of their own (internally locked) structures — no IO, no callbacks into
+        TelemetryState, no blocking — or the receive loop stalls.
         """
         self._snapshot_providers.append(fn)
 
@@ -171,6 +182,7 @@ class TelemetryState:
     def _reset_for_new_session(self) -> None:
         self.latest.clear()
         self.packet_counts.clear()
+        self.packet_errors.clear()
         self.session_type = None
         self.session_kind = None
         self.lap_times_ms.clear()
@@ -571,15 +583,24 @@ class TelemetryState:
         # the telemetry rate (much finer than the 2Hz snapshot).
         self._update_straight(car.m_throttle, car.m_brake, car.m_steer)
 
+    # Config lookups take the config lock; the gate thresholds are re-read at
+    # most this often (the receive thread calls _straight_thresholds at ~60Hz).
+    _STRAIGHT_CFG_TTL_S = 5.0
+
     def _straight_thresholds(self):
+        cached = self._straight_cfg
+        if cached is not None and (self._clock() - cached[0]) < self._STRAIGHT_CFG_TTL_S:
+            return cached[1]
         try:
             from config import get_config
             cfg = get_config()
-            return (cfg.get_float("RADIO_GATE_THROTTLE", 0.9),
+            vals = (cfg.get_float("RADIO_GATE_THROTTLE", 0.9),
                     cfg.get_float("RADIO_GATE_BRAKE", 0.05),
                     cfg.get_float("RADIO_GATE_STEER", 0.15))
         except Exception:  # noqa: BLE001
-            return 0.9, 0.05, 0.15
+            vals = (0.9, 0.05, 0.15)
+        self._straight_cfg = (self._clock(), vals)
+        return vals
 
     def _update_straight(self, throttle, brake, steer) -> None:
         thr, brk, st = self._straight_thresholds()
@@ -950,6 +971,10 @@ class TelemetryState:
         """T2.5: mark a pending rollback; the lap number at this instant is not
         trustworthy, so the actual truncation happens on the next LAP_DATA."""
         self._pending_flashback = True
+        # The first LAP_DATA after the rewind carries post-rewind positions;
+        # rebuilding the baseline here (instead of diffing against the
+        # pre-rewind position) avoids a fake "dropped N places" event.
+        self._last_position = None
         self._add_event("flashback", None, None, "回放（数据回滚）",
                         extra={"flashback_time": getattr(details, "flashbackSessionTime", None)})
 
@@ -1209,24 +1234,40 @@ class TelemetryState:
                 self._frozen = frozen
                 self._frozen_at = now
                 self._snap_dirty = False
+                if not force:
+                    # The publisher (receiver thread) is alive and fresh.
+                    self._publisher_at = now
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a frozen state snapshot (deep copy, safe to read anywhere).
 
-        Consumers on other threads (HTTP, voice) read the frozen copy the
-        receiver thread publishes. When the state has changed since that copy
-        was built (e.g. code/tests driving state directly, or the receiver
-        throttled by SNAPSHOT_HZ), a fresh copy is built on demand so callers
-        always see current data.
+        While the receiver thread is publishing (it republished at SNAPSHOT_HZ
+        as packets flow), readers share that frozen copy — up to 1/SNAPSHOT_HZ
+        stale. This is the point of the design: a reader-triggered rebuild
+        deep-copies the whole state under ``_state_lock`` and stalls the
+        receive loop, so with N polling readers it used to cost N rebuilds
+        (and lost packets) per cycle. When no fresh publisher copy exists
+        (direct drivers / tests, or a stalled receiver), a rebuild still
+        happens on demand, single-flighted through ``_build_lock``.
         """
-        with self._snap_lock:
-            stale = self._snap_dirty or not self._frozen
-            frozen = self._frozen
-        if stale:
-            self.refresh_snapshot(force=True)
+        if self._publisher_fresh():
             with self._snap_lock:
                 frozen = self._frozen
-        return frozen
+            if frozen:
+                return frozen
+        with self._build_lock:      # one rebuild at a time across all readers
+            if self._publisher_fresh():
+                with self._snap_lock:
+                    frozen = self._frozen
+                if frozen:
+                    return frozen   # someone rebuilt it while we waited
+            self.refresh_snapshot(force=True)
+            return self._frozen
+
+    def _publisher_fresh(self) -> bool:
+        """True while the receiver path has refreshed the snapshot recently."""
+        return (self._publisher_at > 0.0
+                and (self._clock() - self._publisher_at) < 2.0)
 
     def _build_snapshot(self) -> Dict[str, Any]:
         """Build a deep-copied snapshot from the live state (writer thread)."""
@@ -1256,8 +1297,16 @@ class TelemetryState:
                 if isinstance(result, dict):
                     # Providers return {namespace: value}; merge each key.
                     extra.update(copy.deepcopy(result))
-            except Exception:  # noqa: BLE001 - a bad provider must not break RX
-                pass
+            except Exception as e:  # noqa: BLE001 - a bad provider must not break RX
+                # Rate-limited trace: a permanently failing provider (e.g. the
+                # race model) used to vanish without a word.
+                self._provider_errors = getattr(self, "_provider_errors", 0) + 1
+                if (self._error_logger is not None
+                        and (self._provider_errors <= 3
+                             or self._provider_errors % 100 == 0)):
+                    self._error_logger.warning(
+                        "snapshot provider failed (%d): %r",
+                        self._provider_errors, e)
 
         return {
             "session": {
@@ -1290,7 +1339,7 @@ class TelemetryState:
             "packet_errors": dict(self.packet_errors),
             "leaderboard": copy.deepcopy(self.leaderboard),
             "position_context": copy.deepcopy(self.latest.get("position_context")),
-            "events": copy.deepcopy(self.events[-6:]),
+            "events": copy.deepcopy(self.events[-24:]),
             # T2.6: final classification rows once the session ends.
             "final_classification": copy.deepcopy(
                 self.latest.get("final_classification")),

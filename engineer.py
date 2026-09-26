@@ -5,8 +5,9 @@ Flow:
         -> hit: return immediately (zero latency / zero cost)
         -> miss: LLM via the active profile
 
-The LLM client is resolved per request from config, so a runtime hot-swap
-(``/api/llm``) takes effect on the next question without a restart.
+The LLM client is resolved lazily from config and cached; ``refresh_client()``
+drops the cache so a runtime hot-swap (``/api/llm``, or the ticker's config
+reload) takes effect on the next question without a restart.
 """
 
 from __future__ import annotations
@@ -51,7 +52,8 @@ class Engineer:
                  config: Any = None) -> None:
         self._cfg = config or get_config()
         # An injected client pins the endpoint (used by tests); otherwise the
-        # client is rebuilt from config on each ask so hot-swap works.
+        # client is built from config once and cached — refresh_client()
+        # invalidates it so config hot-swaps take effect.
         self._client = client
         self.summariser = summariser or Summariser()
         self.router = LocalRouter()
@@ -113,7 +115,12 @@ class Engineer:
     # ------------------------------------------------------------ asking
 
     def cancel(self) -> None:
-        """Signal an in-flight ask to abandon its result."""
+        """Signal an in-flight ask to abandon its result.
+
+        Checked between stages (the synchronous urllib call itself cannot be
+        interrupted): before the LLM call is started and after it returns, so
+        a finished-but-cancelled answer is discarded.
+        """
         self._cancel.set()
 
     def ask(self, question: str, snapshot: Dict[str, Any],
@@ -144,6 +151,11 @@ class Engineer:
                 return answer
 
         # 2) LLM path.
+        if self._cancel.is_set():
+            # cancel() arrived while summarising / routing: don't start the call.
+            self.last_error = None
+            self.last_source = "cancelled"
+            return "[cancelled]"
         client = self.active_client()
         if client is None or not client.configured:
             self.last_error = "LLM 未配置 (LLM_API_KEY / DEEPSEEK_API_KEY)"
@@ -161,6 +173,11 @@ class Engineer:
         except Exception as e:  # noqa: BLE001 - never crash the UI
             self.last_error = str(e)
             return f"[engine error] {e}"
+        if self._cancel.is_set():
+            # The call finished but was cancelled meanwhile: drop the result
+            # (it must not enter history or the UI).
+            self.last_source = "cancelled"
+            return "[cancelled]"
 
         self.last_source = "llm"
         self.last_usage = getattr(client, "last_usage", None)

@@ -10,6 +10,8 @@ page; the existing six keys MUST stay runtime (backward compatibility).
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
@@ -39,6 +41,16 @@ SCHEMA: Tuple[Setting, ...] = (
     Setting("LLM_MODEL", "str", "deepseek-flash", "ai", "模型", runtime=True),
     Setting("PROFILE", "enum", "standard", "ai", "回答档位",
             choices=("fast", "standard", "deep"), runtime=True),
+    # Declared so the config page can edit them; the client (and its fallback
+    # chain) is built at startup, so changes apply on the next launch.
+    Setting("LLM_TIMEOUT", "float", 30.0, "ai", "LLM 超时（秒）",
+            min_value=1.0, max_value=300.0, restart_required=True),
+    Setting("LLM_FALLBACK_BASE_URL", "str", "", "ai", "备用 LLM 地址",
+            restart_required=True),
+    Setting("LLM_FALLBACK_API_KEY", "str", "", "ai", "备用 API Key",
+            restart_required=True, secret=True),
+    Setting("LLM_FALLBACK_MODEL", "str", "", "ai", "备用模型",
+            restart_required=True),
     # ---- Audio devices (existing runtime keys: keep) ----
     Setting("AUDIO_INPUT", "str", "", "audio", "麦克风", runtime=True),
     Setting("AUDIO_OUTPUT", "str", "", "audio", "输出设备", runtime=True),
@@ -63,6 +75,9 @@ SCHEMA: Tuple[Setting, ...] = (
             help="静音只在此配置页调整（局内不再快捷切换）"),
     Setting("RADIO_ALERT_RAIN_PCT", "int", 50, "radio", "降雨预警阈值",
             min_value=0, max_value=100),
+    Setting("RADIO_FUEL_DEFICIT_LAPS", "float", -0.2, "radio", "缺油预警阈值（圈）",
+            min_value=-5.0, max_value=0.0,
+            help="surplus_laps 低于该值时提示缺油（负数=缺油）"),
     Setting("RADIO_BEEP", "bool", True, "radio", "提示音"),
     Setting("RADIO_FILTER", "bool", True, "radio", "无线电滤波"),
     Setting("DRIVER_NAME_STYLE", "enum", "zh", "radio", "车手名念法",
@@ -100,6 +115,15 @@ def get_setting(key: str) -> Optional[Setting]:
     return SCHEMA_BY_KEY.get(key)
 
 
+# PTT_BINDING: kb:<vk> or hid:VID:PID:byte:mask — matches input_sources.
+# parse_binding semantics: VID/PID always hex (0x optional), byte/mask are
+# int(x, 0) (0x-prefixed hex or decimal).
+_BINDING_RE = re.compile(
+    r"^kb:(0x[0-9a-fA-F]+|\d+)$"
+    r"|^hid:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}"
+    r":(0x[0-9a-fA-F]{1,2}|\d+):(0x[0-9a-fA-F]{1,2}|\d+)$")
+
+
 def validate(key: str, value: Any) -> Any:
     """Coerce/validate a value against the schema; raise ValueError if invalid.
 
@@ -120,7 +144,8 @@ def validate(key: str, value: Any) -> Any:
     if s.type == "int":
         try:
             iv = int(float(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: int(float("inf")) is not a ValueError.
             raise ValueError(f"{key}: not an integer: {value!r}")
         if s.min_value is not None and iv < s.min_value:
             raise ValueError(f"{key}: below minimum {s.min_value}")
@@ -132,6 +157,10 @@ def validate(key: str, value: Any) -> Any:
             fv = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key}: not a number: {value!r}")
+        # NaN slips past every min/max comparison; reject non-finite values
+        # so a typo like "nan" cannot poison numeric settings.
+        if not math.isfinite(fv):
+            raise ValueError(f"{key}: not a finite number: {value!r}")
         if s.min_value is not None and fv < s.min_value:
             raise ValueError(f"{key}: below minimum {s.min_value}")
         if s.max_value is not None and fv > s.max_value:
@@ -142,7 +171,18 @@ def validate(key: str, value: Any) -> Any:
         if text not in s.choices:
             raise ValueError(f"{key}: must be one of {s.choices}")
         return text
-    return str(value)
+    if key == "PTT_BINDING":
+        text = str(value).strip()
+        if not _BINDING_RE.match(text):
+            raise ValueError(
+                f"{key}: expected kb:<vk> or hid:VID:PID:byte:mask, got {value!r}")
+        return text
+    text = str(value)
+    if "\n" in text or "\r" in text:
+        # A newline inside a value would inject extra keys into .env.
+        raise ValueError(f"{key}: newlines are not allowed in setting values")
+    # Strip remaining control characters that would corrupt the .env line.
+    return "".join(ch for ch in text if ord(ch) >= 32 or ch == "\t")
 
 
 def runtime_keys() -> frozenset:

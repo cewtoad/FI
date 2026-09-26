@@ -19,8 +19,13 @@ if not defined PY (
 )
 
 rem Interactive launcher: choose 1) web panel or 2) voice mode.
-rem (PY may be a bare path or a launcher command with args, so don't quote it.)
-%PY% FI.py
+rem Quoted embedded runtime: a pack path with spaces would break the launch
+rem (%PY% stays unquoted for the bare "py -3.12"/"python" launchers).
+if exist "%~dp0python.exe" (
+    "%~dp0python.exe" FI.py
+) else (
+    %PY% FI.py
+)
 
 echo.
 echo Exited.

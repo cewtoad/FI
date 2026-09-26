@@ -180,7 +180,9 @@ def resolve_or_warn(fragment: str, kind: str = "input") -> Optional[int]:
         return None
     idx = resolve(fragment, kind)
     if idx is None:
-        print(f"[audio] 找不到{kind}设备 '{fragment}',可用设备: "
-              + ", ".join(d["name"] for d in list_devices(kind)) or "(none)",
+        # Parenthesise: `or "(none)"` must bind to the device list, not to the
+        # whole f-string (which is always truthy, so "(none)" never showed).
+        names = ", ".join(d["name"] for d in list_devices(kind)) or "(none)"
+        print(f"[audio] 找不到{kind}设备 '{fragment}',可用设备: {names}",
               flush=True)
     return idx

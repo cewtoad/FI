@@ -21,7 +21,6 @@ import logging
 import threading
 import time
 import wave
-from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Optional
 
 from contracts import (PRIORITY_ANSWER, PRIORITY_P0, PRIORITY_P1, PRIORITY_P2,
@@ -30,16 +29,6 @@ from contracts import (PRIORITY_ANSWER, PRIORITY_P0, PRIORITY_P1, PRIORITY_P2,
 # Default expiry per priority bucket (seconds): stale info is worse than none.
 DEFAULT_EXPIRIES = {PRIORITY_P0: 30.0, PRIORITY_ANSWER: 30.0,
                     PRIORITY_P1: 20.0, PRIORITY_P2: 15.0}
-
-
-def _priority_bucket(priority: float) -> int:
-    if priority <= PRIORITY_P0:
-        return 0
-    if priority <= PRIORITY_ANSWER:
-        return 1
-    if priority <= PRIORITY_P1:
-        return 2
-    return 3
 
 
 class UnsupportedAudioFormat(RuntimeError):
@@ -193,7 +182,8 @@ class SpeechArbiter:
         self._epoch = 0            # bumped by interrupt_all()
         self._worker: Optional[threading.Thread] = None
         self._stop = threading.Event()
-        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="f1tr-tts")
+        self._synth_workers: list = []
+        self._synth_n = 2         # parallel syntheses; P0 must not queue behind long clips
         self.dropped_expired = 0
         self.dropped_failed = 0
         self.spoken = 0
@@ -204,6 +194,12 @@ class SpeechArbiter:
         if self._worker is not None and self._worker.is_alive():
             return
         self._stop.clear()
+        self._synth_workers = [
+            threading.Thread(target=self._synth_worker, daemon=True,
+                             name=f"f1tr-tts-{i}")
+            for i in range(self._synth_n)]
+        for t in self._synth_workers:
+            t.start()
         self._worker = threading.Thread(target=self._run, name="f1tr-arbiter",
                                         daemon=True)
         self._worker.start()
@@ -213,7 +209,10 @@ class SpeechArbiter:
         with self._cv:
             self._cv.notify_all()
         self.player.stop()
-        self._pool.shutdown(wait=False)
+        for t in self._synth_workers:
+            # daemon threads: a hung synth (Piper g2pW) can never block exit
+            t.join(timeout=1.5)
+        self._synth_workers = []
         if self._worker is not None:
             self._worker.join(timeout=2.0)
             self._worker = None
@@ -221,15 +220,15 @@ class SpeechArbiter:
     # -- public API -------------------------------------------------------
 
     def submit(self, utt: Utterance) -> None:
-        """Queue an utterance; synthesis starts immediately in the pool."""
+        """Queue an utterance; a synth worker picks it up by priority."""
         if not utt.text:
             return  # nothing to say; an unsynthesisable head would block the queue
         with self._cv:
             self._seq += 1
-            item = [utt.priority, self._seq, utt, None]
+            # [priority, seq, utt, audio, claimed]
+            item = [utt.priority, self._seq, utt, None, False]
             heapq.heappush(self._heap, item)
             self._cv.notify_all()
-        self._pool.submit(self._synthesize, item)
 
     def play_now(self, text: str, priority: float = PRIORITY_P0) -> None:
         self.submit(Utterance(text=text, priority=priority, source="system",
@@ -263,8 +262,33 @@ class SpeechArbiter:
 
     # -- internals --------------------------------------------------------
 
-    def _synthesize(self, item) -> None:
-        _prio, _seq, utt, _audio = item
+    def _pick_synth_item(self):
+        """Highest-priority pending (unclaimed, unsynthesised) item, or None."""
+        best = None
+        for cand in self._heap:
+            if cand[3] is None and not cand[4]:
+                if best is None or (cand[0], cand[1]) < (best[0], best[1]):
+                    best = cand
+        return best
+
+    def _synth_worker(self) -> None:
+        """Priority-aware synthesis: an arriving P0 is picked before older
+        low-priority items instead of FIFO-queueing behind them."""
+        while not self._stop.is_set():
+            with self._cv:
+                item = None
+                while not self._stop.is_set():
+                    item = self._pick_synth_item()
+                    if item is not None:
+                        item[4] = True
+                        break
+                    self._cv.wait(timeout=0.1)
+                if item is None:
+                    return
+            self._do_synthesize(item)
+
+    def _do_synthesize(self, item) -> None:
+        _prio, _seq, utt, _audio, _claimed = item
         audio = b""   # b"" = failed/unavailable; must ALWAYS be set or the head blocks
         try:
             if self.tts is not None and getattr(self.tts, "available", False):
@@ -315,25 +339,32 @@ class SpeechArbiter:
                         continue
                     heapq.heappop(self._heap)
                     break
-            if not item[3]:
-                self.dropped_failed += 1   # synthesis failed / TTS unavailable
-                continue
-            utt = item[2]
-            # Expiry: drop stale messages.
-            if (self._clock() - utt.created_at) > self._expiry_for(utt.priority):
-                self.dropped_expired += 1
-                continue
-            # Timing gate: only for gated utterances.
-            if utt.gated and self._gate is not None:
-                if not self._wait_for_gate(utt):
+            try:
+                if not item[3]:
+                    self.dropped_failed += 1   # synthesis failed / TTS unavailable
+                    continue
+                utt = item[2]
+                # Expiry: drop stale messages.
+                if (self._clock() - utt.created_at) > self._expiry_for(utt.priority):
                     self.dropped_expired += 1
                     continue
-            self._emit(utt, item[3])
-            # Single outlet: do not start the next clip while this one plays
-            # (sd.play() would silently cut it off). interrupt_all() ->
-            # player.stop() clears is_playing and releases this wait.
-            while not self._stop.is_set() and self.player.is_playing():
-                time.sleep(0.02)
+                # Timing gate: only for gated utterances.
+                if utt.gated and self._gate is not None:
+                    if not self._wait_for_gate(utt):
+                        self.dropped_expired += 1
+                        continue
+                self._emit(utt, item[3])
+                # Single outlet: do not start the next clip while this one plays
+                # (sd.play() would silently cut it off). interrupt_all() ->
+                # player.stop() clears is_playing and releases this wait.
+                while not self._stop.is_set() and self.player.is_playing():
+                    time.sleep(0.02)
+            except Exception as e:  # noqa: BLE001
+                # One bad clip (e.g. a corrupt WAV) must never kill the only
+                # playback worker: count it and keep serving the queue.
+                self.dropped_failed += 1
+                self._log.warning("playback pipeline error: %r", e)
+                continue
 
     def _wait_for_gate(self, utt) -> bool:
         """Return True when the gate opens before expiry (else drop)."""
@@ -361,9 +392,9 @@ class SpeechArbiter:
         try:
             self.player.play(audio, getattr(self.tts, "mime", "audio/wav"))
             self.spoken += 1
-        except UnsupportedAudioFormat as e:
-            # Unsupported payload (e.g. a non-WAV engine): text is still shown
-            # by the caller; here we log so the queue keeps moving.
+        except Exception as e:  # noqa: BLE001
+            # Unsupported/corrupt payload: text is still shown by the caller;
+            # log so the queue keeps moving.
             self._log.warning("playback skipped: %s", e)
 
 

@@ -16,6 +16,7 @@ around webui.serve() / voice_main.main().
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import sys
 
@@ -50,24 +51,16 @@ def _port_busy(port: int, host: str = "0.0.0.0") -> bool:
     return False
 
 
-def _web_panel_running(web_port: int) -> bool:
-    """True when our own web panel already answers on ``web_port``."""
-    import urllib.request
-    try:
-        with urllib.request.urlopen(
-                f"http://127.0.0.1:{web_port}/api/state", timeout=1.5) as r:
-            return r.status == 200
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _who_holds_udp_port(port: int) -> str:
     """Best-effort: name the process holding a UDP port (Windows netstat)."""
     try:
         import subprocess
         out = subprocess.run(["netstat", "-ano", "-p", "udp"],
                              capture_output=True, timeout=8)
-        text = out.stdout.decode("utf-8", "replace")
+        # netstat/tasklist print the ANSI code page (GBK on Chinese Windows);
+        # UTF-8 decoding turned process names into mojibake.
+        encoding = "mbcs" if os.name == "nt" else "utf-8"
+        text = out.stdout.decode(encoding, "replace")
         owners = []
         for line in text.splitlines():
             parts = line.split()
@@ -78,7 +71,7 @@ def _who_holds_udp_port(port: int) -> str:
                     q = subprocess.run(
                         ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                         capture_output=True, timeout=8)
-                    csv = q.stdout.decode("utf-8", "replace").strip()
+                    csv = q.stdout.decode(encoding, "replace").strip()
                     if csv and csv.startswith('"'):
                         name = csv.split('","')[0].strip('"')
                     owners.append(f"{name}(PID {pid})")

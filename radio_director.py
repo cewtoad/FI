@@ -43,6 +43,8 @@ class RadioDirector:
         self._last_event_seq = 0
         self._alerts_this_lap = 0
         self._lap_marker = None
+        self._session_uid: Any = None
+        self._snap_lap: dict = {}
         # -inf, not 0.0: with a clock that starts near 0 (tests, fresh boot of
         # an injected clock) the first alerts were swallowed by the min-gap.
         self._last_alert_at = float("-inf")
@@ -107,6 +109,7 @@ class RadioDirector:
     # ---------------------------------------------------------------- tick
 
     def tick(self, snapshot: dict, now: float) -> int:
+        self._check_new_session(snapshot)
         if not self._enabled():
             self._remember(snapshot)
             return 0
@@ -151,6 +154,28 @@ class RadioDirector:
         return emitted
 
     # ---------------------------------------------------------------- filters
+
+    def _check_new_session(self, snapshot: dict) -> None:
+        """Reset per-session state when the session UID changes.
+
+        state._reset_for_new_session() restarts event seqs at 1 and clears
+        laps, but this director kept the previous session's ``_last_event_seq``
+        and one-shot dedup keys — so in the SECOND session of a run every
+        event-driven rule (safety car, red flag, penalties, overtakes, ...)
+        stayed silent for the whole session, and one-shot alerts could never
+        refire.
+        """
+        uid = (snapshot.get("session") or {}).get("session_uid")
+        if uid is None or uid == self._session_uid:
+            return
+        self._session_uid = uid
+        self._last_fired.clear()
+        self._fired_keys.clear()
+        self._last_event_seq = 0
+        self._alerts_this_lap = 0
+        self._lap_marker = None
+        self._prev_model = None
+        self._log.info("radio state reset for new session %s", uid)
 
     def _verbosity_allows(self, rule: Rule) -> bool:
         return _VERBOSITY_RANK[self._verbosity()] >= _VERBOSITY_RANK.get(rule.min_verbosity, 2)
@@ -213,8 +238,6 @@ class RadioDirector:
         if events:
             self._last_event_seq = max(e.get("seq", 0) for e in events)
         self._snap_lap = (snapshot.get("latest", {}) or {}).get("lap", {}) or {}
-
-    _snap_lap: dict = {}
 
     def _new_events(self, snapshot: dict) -> List[dict]:
         events = snapshot.get("events") or []

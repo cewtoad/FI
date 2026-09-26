@@ -79,7 +79,12 @@ class Config:
     # ------------------------------------------------------------ reading
 
     def _read(self) -> Dict[str, str]:
-        return {**parse_env_file(self._env_path), **os.environ}
+        # Keep the file-only view separate: reload eviction must compare the
+        # overlay against keys the FILE defines, not against the merged view
+        # (which also contains every process environment variable — using it
+        # dropped overlays that were shadowed by unrelated env vars).
+        self._file_env = parse_env_file(self._env_path)
+        return {**self._file_env, **os.environ}
 
     def get(self, key: str, default: str = "") -> str:
         """Read a value. Runtime overlay wins, then live os.environ, then .env.
@@ -115,10 +120,6 @@ class Config:
             return False
         return default
 
-    def as_dict(self) -> Dict[str, str]:
-        with self._lock:
-            return {**self._env, **self._overlay}
-
     # ------------------------------------------------------------ writing
 
     def set_runtime(self, key: str, value: str, persist: bool = True) -> None:
@@ -126,6 +127,10 @@ class Config:
 
         Validates the value against the schema (type/range/choices) and raises
         ValueError on a bad value (the previous code only checked the key).
+
+        With ``persist=False`` the value lives only in the in-memory overlay:
+        if the key is also defined in .env, a later hot reload treats the file
+        as authoritative and reverts it (documented "file wins" semantics).
         """
         if key not in self.RUNTIME_KEYS:
             raise KeyError(f"not a runtime key: {key}")
@@ -140,29 +145,33 @@ class Config:
     def _persist(self, updates: Dict[str, str]) -> None:
         """Rewrite the .env file with the updated keys (atomic, T3.2).
 
-        Writes to a temp file then os.replace()s it into place so a crash or a
-        concurrent reader never sees a half-written .env. Failures are recorded
-        in ``last_persist_error`` instead of being swallowed silently.
+        The read-merge-write sequence runs under the config lock: two
+        concurrent writers (webui is a ThreadingHTTPServer) each read the file,
+        merge their own update and rewrite it — outside the lock the second
+        writer could resurrect the first writer's stale keys. The temp file +
+        ``os.replace`` keeps a crash or concurrent reader from seeing a
+        half-written .env. Failures are recorded in ``last_persist_error``
+        instead of being swallowed silently.
         """
-        lines: list = []
-        if self._env_path.exists():
-            lines = self._env_path.read_text(encoding="utf-8-sig").splitlines()
-        seen = set()
-        out = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                k = stripped.split("=", 1)[0].strip()
-                if k in updates:
-                    out.append(f"{k}={updates[k]}")
-                    seen.add(k)
-                    continue
-            out.append(line)
-        for k, v in updates.items():
-            if k not in seen:
-                out.append(f"{k}={v}")
         try:
             with self._lock:
+                lines: list = []
+                if self._env_path.exists():
+                    lines = self._env_path.read_text(encoding="utf-8-sig").splitlines()
+                seen = set()
+                out = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        k = stripped.split("=", 1)[0].strip()
+                        if k in updates:
+                            out.append(f"{k}={updates[k]}")
+                            seen.add(k)
+                            continue
+                    out.append(line)
+                for k, v in updates.items():
+                    if k not in seen:
+                        out.append(f"{k}={v}")
                 tmp = self._env_path.with_suffix(self._env_path.suffix + ".tmp")
                 tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
                 os.replace(tmp, self._env_path)
@@ -194,9 +203,11 @@ class Config:
                 return False
             self._env = self._read()
             self._env_mtime = mtime
-            # Drop overlay entries the file now defines (file wins).
+            # Drop overlay entries the FILE now defines (file wins). Compare
+            # against the file-only view, not the merged env: process
+            # environment variables must not evict runtime overrides.
             for key in list(self._overlay):
-                if key in self._env:
+                if key in self._file_env:
                     del self._overlay[key]
         return True
 
