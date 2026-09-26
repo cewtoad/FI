@@ -83,12 +83,14 @@ class InputSource:
                 self.on_press()
 
     def _emit_release(self) -> None:
+        # NOTE: do NOT also fire on_tap here. voice_trigger.RawKeyTrigger already
+        # emits press+release then its own tap, and a caller that passes both
+        # on_release and on_tap would run its action twice (the "release
+        # double-fired" bug fixed for voice_main). Tap is opt-in via the trigger.
         if self._pressed:
             self._pressed = False
             if self.on_release:
                 self.on_release()
-            if self.on_tap:
-                self.on_tap()
 
 
 class KeyboardSource(InputSource):

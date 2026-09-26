@@ -32,6 +32,21 @@ def test_release_workflow_matches_ps1_audio_policy():
     assert "--exclude-module numpy" not in wf
 
 
+def test_both_build_paths_use_the_shared_manifest_args():
+    """Core build args come from build_manifest, so CI/local cannot drift.
+
+    The CI build previously hard-coded the arg list and silently lost
+    --add-data data (data/driver_names.json)."""
+    root = build_manifest.ROOT
+    ps1 = (root / "build_release.ps1").read_text(encoding="utf-8")
+    wf = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    for src in (ps1, wf):
+        assert "build_manifest.py pyinstaller-args" in src
+    # data/ must be shipped in the emitted args.
+    assert "--add-data" in build_manifest.pyinstaller_args()
+    assert "data;data" in build_manifest.pyinstaller_args()
+
+
 def test_make_zip_excludes_user_data(tmp_path):
     stage = tmp_path / "stage"
     stage.mkdir()

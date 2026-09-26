@@ -45,33 +45,12 @@ function Build-Core {
         Write-Host "安装 PyInstaller 到 $BuildLib ..."
         py -3.12 -m pip install pyinstaller --target $BuildLib --quiet
     }
-    # T10a: hidden-imports come from the shared manifest (provider modules are
-    # registered by string, so PyInstaller's static analysis cannot see them).
-    $hidden = @()
-    py -3.12 build_manifest.py hidden-imports | ForEach-Object {
-        $hidden += "--hidden-import"; $hidden += $_
-    }
-    # T10a: ship read-only resources (data/) into _internal so
-    # paths.resource_root() finds them in the frozen build.
-    $addData = @()
-    if (Test-Path (Join-Path $root "data")) {
-        $addData += "--add-data"; $addData += "data;data"
-    }
-    # T10a: sounddevice + numpy are NO LONGER excluded - the core pack shares
-    # one audio code path with the full pack (voice mode works there too).
-    py -3.12 -m PyInstaller `
-        --noconfirm --clean --onedir --noupx `
-        --name F1Engineer `
-        --version-file version_info.txt `
-        --paths . `
-        --exclude-module tkinter `
-        --exclude-module matplotlib `
-        --exclude-module faster_whisper `
-        --exclude-module ctranslate2 `
-        @addData `
-        @hidden `
-        --distpath $dist --workpath $work `
-        FI.py
+    # T10a/T10b: the whole argument list comes from the shared manifest so this
+    # build and release.yml cannot drift (CI once lost --add-data data). Hidden
+    # imports, excludes and the data/ resource are all handled there.
+    $args = @()
+    py -3.12 build_manifest.py pyinstaller-args | ForEach-Object { $args += $_ }
+    py -3.12 -m PyInstaller @args --distpath $dist --workpath $work
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败" }
 
     $exeDir = Join-Path $dist "F1Engineer"

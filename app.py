@@ -113,8 +113,10 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
             write_record(raw_fh, int((_time.monotonic() - t0) * 1000), payload)
         logger.info("recording raw UDP packets to %s", raw_file)
 
-    # Keep the receive hot path cheap: persist laps at most RECORD_HZ times a
-    # second, plus immediately whenever a new lap completes (LAP_DATA).
+    # Keep the receive hot path cheap: persist at most RECORD_HZ times a
+    # second. (The old "plus every LAP_DATA" exception fired on every LAP_DATA
+    # packet - up to 60Hz - forcing a full snapshot rebuild each time; laps
+    # come from SESSION_HISTORY anyway, which the 2Hz beat picks up.)
     record_hz = 2.0
     last_record = [0.0]
 
@@ -122,9 +124,7 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
         if recorder is None:
             return
         now = time.monotonic()
-        pkt_id = getattr(getattr(packet, "m_header", None), "m_packetId", None)
-        due = (now - last_record[0]) >= (1.0 / record_hz)
-        if not due and pkt_id != F1PacketType.LAP_DATA:
+        if (now - last_record[0]) < (1.0 / record_hz):
             return
         last_record[0] = now
         try:
@@ -207,19 +207,31 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
                     snapshot_provider=app.state.snapshot,
                     logger=logger)
 
-    def _tick(snapshot: dict, now: float) -> None:
-        try:
-            get_config().reload_if_changed()
-        except Exception:
-            pass
-        if race_model is not None:
-            race_model.update(snapshot, now)
-        if app.radio is not None:
-            app.radio.tick(snapshot, now)
-        if app.extras.get("debrief") is not None:
-            app.extras["debrief"](snapshot, now)
+    # One handler per stage so the ticker's per-handler isolation/counters
+    # apply (a radio failure must not skip the debrief, and vice versa).
+    def _reload(snapshot: dict, now: float) -> None:
+        get_config().reload_if_changed()
 
-    ticker.add(_tick, "pipeline")
+    def _radio(snapshot: dict, now: float) -> None:
+        if app.radio is None:
+            return
+        if race_model is not None:
+            # The snapshot's race_model was merged before this beat's update;
+            # hand the radio the fresh one (shallow copy: the frozen snapshot
+            # is shared with other reader threads and must not be mutated).
+            snapshot = {**snapshot, "race_model": race_model.latest_dict()}
+        app.radio.tick(snapshot, now)
+
+    def _debrief(snapshot: dict, now: float) -> None:
+        writer = app.extras.get("debrief")
+        if writer is not None:
+            writer(snapshot, now)
+
+    ticker.add(_reload, "config_reload")
+    if race_model is not None:
+        ticker.add(race_model.update, "race_model")
+    ticker.add(_radio, "radio")
+    ticker.add(_debrief, "debrief")
     # T8: end-of-session debrief writer (local TXT, no LLM).
     try:
         from debrief import DebriefWriter

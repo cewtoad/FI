@@ -43,11 +43,20 @@ def _settings_payload() -> List[Dict[str, Any]]:
     return out
 
 
+def _is_masked(value: Any) -> bool:
+    """True for the '****abcd' form produced by _settings_payload()."""
+    v = str(value or "")
+    return len(v) > 4 and set(v[:-4]) == {"*"}
+
+
 def apply_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
     """Validate + persist a batch of setting updates. Returns a result dict."""
     cfg = get_config()
     applied, errors = {}, {}
     for key, value in updates.items():
+        s = config_schema.get_setting(key)
+        if s is not None and s.secret and _is_masked(value):
+            continue  # the page echoes the masked secret back; never persist it
         try:
             cfg.set_runtime(key, value, persist=True)
             applied[key] = cfg.get(key, "")
@@ -153,8 +162,16 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(404, {"error": "not found"})
 
+    def _origin_ok(self) -> bool:
+        # CSRF guard: browsers send Origin on cross-site POSTs (even no-cors).
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        port = self.server.server_address[1]
+        return origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+
     def do_POST(self):
-        if not self._local():
+        if not self._local() or not self._origin_ok():
             self._json(403, {"error": "localhost only"})
             return
         path = urlparse(self.path).path

@@ -64,17 +64,37 @@ def _prev_sc(prev) -> str:
     return str((prev.flags or {}).get("safety_car") or "")
 
 
+def _session(ctx) -> dict:
+    """Session fields: real snapshots keep them under latest.session."""
+    snap = ctx.snapshot or {}
+    return {**(snap.get("session") or {}),
+            **((snap.get("latest") or {}).get("session") or {})}
+
+
+def _lap_key(ctx, base: str) -> str:
+    """Scope a transition/state dedup key to the current lap.
+
+    A transition (safety car #2, a later pit window) must be able to announce
+    again on a different lap, but the director otherwise suppresses a repeated
+    dedup_key for the whole session.
+    """
+    lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
+    n = lap.get("current_lap_num")
+    return f"{base}_{n if isinstance(n, int) else 'x'}"
+
+
 # ---------------------------------------------------------------- race P0
 
 def _rule_sc_deployed(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["sc_deployed"]
-    if not _sc_active(ctx.curr):
-        return None
+    if not _sc_active(ctx.curr) or "VIRTUAL" in _sc_status(ctx.curr).upper():
+        return None   # VSC has its own rule; do not announce it twice
     # Deploy transition: previous not active, current active.
     prev_active = bool((ctx.prev.flags or {}).get("safety_car_active")) if ctx.prev else False
     if prev_active:
         return None
-    return _alert(rule, T.render("sc_deployed", name="安全车"), ctx.now, "sc_deployed")
+    return _alert(rule, T.render("sc_deployed", name="安全车"), ctx.now,
+                  _lap_key(ctx, "sc_deployed"))
 
 
 def _rule_vsc_deployed(ctx: RuleCtx) -> Optional[Alert]:
@@ -82,7 +102,8 @@ def _rule_vsc_deployed(ctx: RuleCtx) -> Optional[Alert]:
     cur = _sc_status(ctx.curr).upper()
     prev = _prev_sc(ctx.prev).upper()
     if "VIRTUAL" in cur and "VIRTUAL" not in prev:
-        return _alert(rule, T.render("vsc_deployed"), ctx.now, "vsc_deployed")
+        return _alert(rule, T.render("vsc_deployed"), ctx.now,
+                      _lap_key(ctx, "vsc_deployed"))
     return None
 
 
@@ -90,7 +111,8 @@ def _rule_sc_ending(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["sc_ending"]
     for ev in ctx.new_events:
         if ev.get("kind") == "safety_car" and ev.get("event_type") in (1, 2, 3):
-            return _alert(rule, T.render("sc_ending"), ctx.now, "sc_ending")
+            return _alert(rule, T.render("sc_ending"), ctx.now,
+                          f"sc_ending_{ev.get('seq')}")
     return None
 
 
@@ -98,7 +120,8 @@ def _rule_red_flag(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["red_flag"]
     for ev in ctx.new_events:
         if ev.get("kind") == "red_flag":
-            return _alert(rule, T.render("red_flag"), ctx.now, "red_flag")
+            return _alert(rule, T.render("red_flag"), ctx.now,
+                          f"red_flag_{ev.get('seq')}")
     return None
 
 
@@ -156,7 +179,7 @@ def _rule_penalty_issued(ctx: RuleCtx) -> Optional[Alert]:
         if ev.get("kind") == "penalty" and ev.get("is_player"):
             secs = ev.get("penalty_time_s") or 0
             return _alert(rule, T.render("penalty_issued", seconds=secs), ctx.now,
-                          "penalty_issued")
+                          f"penalty_issued_{ev.get('seq')}")
     return None
 
 
@@ -183,7 +206,7 @@ def _rule_pit_window_open(ctx: RuleCtx) -> Optional[Alert]:
     w = ctx.curr.pit_window
     return _alert(rule, T.render("pit_window_open", ideal=w.ideal_lap,
                                  latest=w.latest_lap, rejoin=w.rejoin_position),
-                  ctx.now, "pit_window_open")
+                  ctx.now, _lap_key(ctx, "pit_window_open"))
 
 
 def _rule_pit_window_last(ctx: RuleCtx) -> Optional[Alert]:
@@ -192,7 +215,7 @@ def _rule_pit_window_last(ctx: RuleCtx) -> Optional[Alert]:
         return None
     w = ctx.curr.pit_window
     return _alert(rule, T.render("pit_window_last", latest=w.latest_lap),
-                  ctx.now, "pit_window_last")
+                  ctx.now, _lap_key(ctx, "pit_window_last"))
 
 
 def _rule_pit_window_missed(ctx: RuleCtx) -> Optional[Alert]:
@@ -201,7 +224,7 @@ def _rule_pit_window_missed(ctx: RuleCtx) -> Optional[Alert]:
         return None
     w = ctx.curr.pit_window
     return _alert(rule, T.render("pit_window_missed", latest=w.latest_lap),
-                  ctx.now, "pit_window_missed")
+                  ctx.now, _lap_key(ctx, "pit_window_missed"))
 
 
 def _rule_pit_sc_opportunity(ctx: RuleCtx) -> Optional[Alert]:
@@ -213,7 +236,7 @@ def _rule_pit_sc_opportunity(ctx: RuleCtx) -> Optional[Alert]:
         return None
     return _alert(rule, T.render("pit_sc_opportunity", ideal=w.ideal_lap,
                                  rejoin=w.rejoin_position),
-                  ctx.now, "pit_sc_opportunity")
+                  ctx.now, _lap_key(ctx, "pit_sc_opportunity"))
 
 
 def _rule_fuel_deficit(ctx: RuleCtx) -> Optional[Alert]:
@@ -250,8 +273,7 @@ def _rule_rain_incoming(ctx: RuleCtx) -> Optional[Alert]:
     eta = ctx.curr.rain_eta_min
     if eta is None or eta > 10:
         return None
-    session = ctx.snapshot.get("session", {}) or {}
-    forecast = session.get("weather_forecast") or []
+    forecast = _session(ctx).get("weather_forecast") or []
     pct = 0
     for e in forecast:
         if e.get("time_offset_min") == eta:
@@ -267,7 +289,7 @@ def _rule_rain_incoming(ctx: RuleCtx) -> Optional[Alert]:
                   "rain_incoming")
 
 
-def _rule_track_limits(ctx: RuleCtx) -> Optional[Alert]:
+def _rule_track_limits_warning(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["track_limits_warning"]
     lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
     count = lap.get("corner_cutting_warnings")
@@ -302,7 +324,9 @@ def _rule_undercut_risk(ctx: RuleCtx) -> Optional[Alert]:
     lb = ctx.snapshot.get("leaderboard") or []
     for r in lb:
         if r.get("car_index") == behind.target_index and r.get("pit_status") in ("PITTING", "IN_PIT_AREA"):
-            name = ctx.names.name_from_index(behind.target_index, {})
+            # Use the leaderboard's driver name instead of the empty participant
+            # map, which always degraded to "carN".
+            name = r.get("driver") or ctx.names.name_from_index(behind.target_index, {})
             return _alert(rule, T.render("undercut_risk", name=name), ctx.now,
                           "undercut_risk")
     return None
@@ -311,7 +335,8 @@ def _rule_undercut_risk(ctx: RuleCtx) -> Optional[Alert]:
 def _rule_yellow_ahead(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["yellow_ahead"]
     if (ctx.curr.flags or {}).get("player_in_yellow_zone"):
-        return _alert(rule, T.render("yellow_ahead", zone=""), ctx.now, "yellow_ahead")
+        return _alert(rule, T.render("yellow_ahead", zone=""), ctx.now,
+                      _lap_key(ctx, "yellow_ahead"))
     return None
 
 
@@ -397,7 +422,7 @@ def _rule_gap_report(ctx: RuleCtx) -> Optional[Alert]:
     return _alert(rule, text, ctx.now, f"gap_{cur}")
 
 
-def _rule_lap_summary(ctx: RuleCtx) -> Optional[Alert]:
+def _rule_lap_summary_chatty(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["lap_summary_chatty"]
     lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
     cur = lap.get("current_lap_num")
@@ -413,10 +438,11 @@ def _rule_lap_summary(ctx: RuleCtx) -> Optional[Alert]:
 
 def _rule_quali_time(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["quali_time"]
-    left = (ctx.snapshot.get("session", {}) or {}).get("session_time_left_s")
+    left = _session(ctx).get("session_time_left_s")
     if not isinstance(left, (int, float)):
         return None
-    for mark, tid in ((300, "quali_time_300"), (120, "quali_time_120"), (60, "quali_time_60")):
+    # Smallest mark first: at 50s left say "1 分钟", not "5 分钟".
+    for mark, tid in ((60, "quali_time_60"), (120, "quali_time_120"), (300, "quali_time_300")):
         if left <= mark:
             return _alert(rule, T.render(tid), ctx.now, tid)
     return None
@@ -519,30 +545,28 @@ def build_default_rules() -> List[Rule]:
         _RULES[rid] = r
         rules.append(r)
 
-    # P0 - always on, all session kinds
-    for rid in ("sc_deployed", "vsc_deployed", "sc_ending", "red_flag",
-                "engine_failure", "major_damage", "drs_fault", "ers_fault",
-                "wrong_way", "penalty_issued", "player_retired"):
+    def register(rid, cat, prio, cd, kinds, verbosity):
+        """Look up ``_rule_<rid>`` and fail loudly if a declared id has no
+        implementation (a rename used to silently drop the rule from the set)."""
         fn = globals().get(f"_rule_{rid}")
-        if fn:
-            add(rid, "p0", PRIORITY_P0, 30.0, (), "minimal", fn)
-    # P0 safety-car/vsc are race-only realistically but harmless elsewhere.
+        if fn is None:
+            raise RuntimeError(f"no rule function for id {rid!r}")
+        add(rid, cat, prio, cd, kinds, verbosity, fn)
+
+    # P0 - always on, all session kinds
+    for rid in _P0_RACE:
+        register(rid, "p0", PRIORITY_P0, 30.0, (), "minimal")
     # P1
     for rid in _P1_RACE:
-        fn = globals().get(f"_rule_{rid}")
-        if fn:
-            kinds = race_kinds if rid.startswith(("pit_", "fuel_", "undercut", "yellow", "track")) else ()
-            add(rid, "p1", PRIORITY_P1, 15.0, kinds, "minimal" if rid.startswith("pit_") else "normal", fn)
+        kinds = race_kinds if rid.startswith(("pit_", "fuel_", "undercut", "yellow", "track")) else ()
+        register(rid, "p1", PRIORITY_P1, 15.0, kinds,
+                 "minimal" if rid.startswith("pit_") else "normal")
     # P2
     for rid in _P2_RACE:
-        fn = globals().get(f"_rule_{rid}")
-        if fn:
-            add(rid, "p2", PRIORITY_P2, 10.0, race_kinds, "chatty", fn)
+        register(rid, "p2", PRIORITY_P2, 10.0, race_kinds, "chatty")
     # quali
     for rid in ("quali_time", "quali_lap_done"):
-        fn = globals().get(f"_rule_{rid}")
-        if fn:
-            add(rid, "p2", PRIORITY_P2, 5.0, ("qualifying",), "normal", fn)
+        register(rid, "p2", PRIORITY_P2, 5.0, ("qualifying",), "normal")
     # practice
     add("practice_long_run", "p2", PRIORITY_P2, 30.0, ("practice",), "normal",
         _rule_practice_long_run)

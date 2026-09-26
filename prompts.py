@@ -107,24 +107,31 @@ def _select_facts(question: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     """
     q = (question or "").lower()
     groups = []
+    # Flat (un-namespaced) fact prefixes to keep for the matched intents.
+    flat = []
+    core = ("lap", "total_laps", "position", "last_lap_time", "best_lap_time",
+            "current_lap_time", "tyre_compound", "tyre_age_laps", "speed_kph")
     if any(k in q for k in ("胎", "轮胎", "磨损", "胎温", "stint", "衰退")):
         groups.append(("tyre", "stint", "pace"))
+        flat.append("tyre_")
     if any(k in q for k in ("前车", "后面", "落后", "差距", "追", "超", "名次", "位置", "gap")):
         groups.append(("gap", "position"))
     if any(k in q for k in ("进站", "策略", "油", "窗口", "pit", "fuel", "plan")):
         groups.append(("pit", "fuel", "stint"))
+        # Flat fuel facts (fuel_kg, fuel_laps_left, fuel_surplus_laps ...) carry
+        # no namespace prefix; keep them so the model can actually answer fuel
+        # questions instead of seeing only the namespaced ones.
+        flat.append("fuel_")
     if any(k in q for k in ("天气", "雨", "weather", "rain")):
         groups.append(("weather",))
     if any(k in q for k in ("排位", "最快圈", "杆位", "quali")):
         groups.append(("qualifying",))
     prefixes = tuple(f"{g}." for grp in groups for g in grp)
-    core = ("lap", "total_laps", "position", "last_lap_time", "best_lap_time",
-            "current_lap_time", "tyre_compound", "tyre_age_laps", "speed_kph")
     if not prefixes:
         return facts
     out = {}
     for k, v in facts.items():
-        if k in core or k.startswith(prefixes):
+        if k in core or k.startswith(prefixes) or k.startswith(tuple(flat)):
             out[k] = v
     return out or facts
 

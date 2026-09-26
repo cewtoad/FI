@@ -65,7 +65,7 @@ class Stint:
     wear_rate_pct_per_lap: float
     wear_now_pct: float
     pace_degradation_s_per_lap: float
-    projected_life_laps: float
+    projected_life_laps: Optional[float]   # None = no measurable wear yet
 
 
 @dataclass

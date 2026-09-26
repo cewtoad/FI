@@ -73,6 +73,18 @@ def _check_update() -> Dict[str, Any]:
     return result
 
 
+def _json_safe(o):
+    """Replace non-finite floats with None: json.dumps would emit the invalid
+    token ``Infinity``/``NaN`` and the page's ``r.json()`` would throw."""
+    if isinstance(o, float) and (o != o or o in (float("inf"), float("-inf"))):
+        return None
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
+
+
 def _version_tuple(v: str):
     parts = []
     for p in str(v).split("."):
@@ -539,7 +551,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "alerts": list(ctx.get("alert_log", [])),
                 "race_model": snap.get("race_model"),
             }
-            self._send(200, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
+            self._send(200, json.dumps(_json_safe(payload), ensure_ascii=False,
+                                       default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
         elif self.path == "/api/version":
             self._send_json(200, _check_update())
@@ -594,9 +607,19 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain")
 
+    def _origin_ok(self) -> bool:
+        """Block cross-site (CSRF) POSTs: a browser always sends Origin on a
+        cross-origin POST, even with mode:'no-cors'. Non-browser clients
+        (urllib/http.client/tests) send none and are allowed."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        port = self.server.server_address[1]
+        return origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+
     def do_POST(self):
-        if not self._host_ok():
-            self._send(403, b"forbidden host", "text/plain")
+        if not self._host_ok() or not self._origin_ok():
+            self._send(403, b"forbidden origin", "text/plain")
             return
         if self.path == "/api/ask_voice":
             self._ask_voice()

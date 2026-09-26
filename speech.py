@@ -63,6 +63,9 @@ class AudioPlayer:
         if not audio:
             return
         samples, sr = self._decode(audio, mime)
+        # Mark busy *before* the thread starts so is_playing() is truthful
+        # immediately (the arbiter serialises clips on it).
+        self._playing.set()
         threading.Thread(target=self._play_samples, args=(samples, sr),
                          daemon=True, name="f1tr-playback").start()
 
@@ -107,32 +110,33 @@ class AudioPlayer:
         return data, sr
 
     def _play_samples(self, data, sr) -> None:
-        import numpy as np
-        import sounddevice as sd
-
-        import audio
-
-        dev = audio.active_device("output", self.output_device or None)
-        idx = dev["id"]
-        if idx is None:
-            self.last_error = "没有可用的输出设备（未连接扬声器/耳机？）"
-            self._log.warning(self.last_error)
-            return
         try:
-            info = sd.query_devices(idx) if idx is not None else sd.query_devices(kind="output")
-            dev_sr = int(info.get("default_samplerate") or sr)
-            max_out = int(info.get("max_output_channels") or 2)
-        except Exception:
-            dev_sr, max_out = sr, 2
-        if dev_sr != sr:
-            data = _resample(data, sr, dev_sr)
-        if data.ndim == 1 and max_out >= 2:
-            data = np.column_stack([data, data])
-        elif data.ndim == 2 and data.shape[1] == 1 and max_out >= 2:
-            data = np.repeat(data, 2, axis=1)
-        self._playing.set()
-        self.last_error = None
-        try:
+            import numpy as np
+            import sounddevice as sd
+
+            import audio
+
+            dev = audio.active_device("output", self.output_device or None)
+            idx = dev["id"]
+            if idx is None:
+                self.last_error = "没有可用的输出设备（未连接扬声器/耳机？）"
+                self._log.warning(self.last_error)
+                return
+            try:
+                info = sd.query_devices(idx) if idx is not None else sd.query_devices(kind="output")
+                dev_sr = int(info.get("default_samplerate") or sr)
+                max_out = int(info.get("max_output_channels") or 2)
+            except Exception:
+                dev_sr, max_out = sr, 2
+            if dev_sr != sr:
+                data = _resample(data, sr, dev_sr)
+            if data.ndim == 1 and max_out >= 2:
+                data = np.column_stack([data, data])
+            elif data.ndim == 2 and data.shape[1] == 1 and max_out >= 2:
+                data = np.repeat(data, 2, axis=1)
+            self.last_error = None
+            if not self._playing.is_set():
+                return  # stop()/interrupt_all() arrived before we started
             sd.play(data, dev_sr, device=idx)
             # Poll so stop() can break out (sd.wait() cannot be interrupted).
             while self._playing.is_set():
@@ -186,10 +190,12 @@ class SpeechArbiter:
         self._heap = []            # (priority, seq, Utterance, audio|None)
         self._seq = 0
         self._recording = False
+        self._epoch = 0            # bumped by interrupt_all()
         self._worker: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="f1tr-tts")
         self.dropped_expired = 0
+        self.dropped_failed = 0
         self.spoken = 0
 
     # -- lifecycle --------------------------------------------------------
@@ -216,13 +222,14 @@ class SpeechArbiter:
 
     def submit(self, utt: Utterance) -> None:
         """Queue an utterance; synthesis starts immediately in the pool."""
+        if not utt.text:
+            return  # nothing to say; an unsynthesisable head would block the queue
         with self._cv:
             self._seq += 1
             item = [utt.priority, self._seq, utt, None]
             heapq.heappush(self._heap, item)
             self._cv.notify_all()
-        if utt.text:
-            self._pool.submit(self._synthesize, item)
+        self._pool.submit(self._synthesize, item)
 
     def play_now(self, text: str, priority: float = PRIORITY_P0) -> None:
         self.submit(Utterance(text=text, priority=priority, source="system",
@@ -239,6 +246,7 @@ class SpeechArbiter:
         """Stop playback and clear the queue (PTT press)."""
         self.player.stop()
         with self._cv:
+            self._epoch += 1
             self._heap.clear()
             self._cv.notify_all()
 
@@ -250,27 +258,29 @@ class SpeechArbiter:
             queued = len(self._heap)
         return {"queued": queued, "spoken": self.spoken,
                 "dropped_expired": self.dropped_expired,
+                "dropped_failed": self.dropped_failed,
                 "playing": self.player.is_playing()}
 
     # -- internals --------------------------------------------------------
 
     def _synthesize(self, item) -> None:
         _prio, _seq, utt, _audio = item
-        if self.tts is None or not getattr(self.tts, "available", False):
-            return
+        audio = b""   # b"" = failed/unavailable; must ALWAYS be set or the head blocks
         try:
-            audio = self.tts.synthesize(utt.text)
+            if self.tts is not None and getattr(self.tts, "available", False):
+                audio = self.tts.synthesize(utt.text) or b""
+                if self._fx is not None and audio:
+                    try:
+                        audio = self._fx(audio, getattr(self.tts, "mime", ""))
+                    except Exception as e:  # noqa: BLE001
+                        self._log.warning("radio fx failed: %r", e)
         except Exception as e:  # noqa: BLE001
             self._log.warning("TTS synthesis failed: %r", e)
-            return
-        if self._fx is not None and audio:
-            try:
-                audio = self._fx(audio, getattr(self.tts, "mime", ""))
-            except Exception as e:  # noqa: BLE001
-                self._log.warning("radio fx failed: %r", e)
-        with self._cv:
-            item[3] = audio
-            self._cv.notify_all()
+            audio = b""
+        finally:
+            with self._cv:
+                item[3] = audio
+                self._cv.notify_all()
 
     def _expiry_for(self, priority: float) -> float:
         return self._expiries.get(priority,
@@ -291,15 +301,23 @@ class SpeechArbiter:
                     # Peek top item; wait for its synthesis to finish.
                     item = self._heap[0]
                     if item[3] is None:
-                        # Not synthesised yet: give the pool a moment, but do
-                        # not block higher-priority arrivals from jumping in.
-                        self._cv.wait(timeout=0.05)
-                        if self._heap and self._heap[0] is item and item[3] is None:
-                            # still top and unsynthesised -> keep waiting a beat
+                        # Not synthesised yet. Expire it here too: expiry used
+                        # to be checked only after pop, so a head that never
+                        # finished synthesis blocked the queue forever.
+                        head = item[2]
+                        if (self._clock() - head.created_at) > self._expiry_for(head.priority):
+                            heapq.heappop(self._heap)
+                            self.dropped_expired += 1
                             continue
+                        # Give the pool a moment; higher-priority arrivals can
+                        # still jump in front meanwhile.
+                        self._cv.wait(timeout=0.05)
                         continue
                     heapq.heappop(self._heap)
                     break
+            if not item[3]:
+                self.dropped_failed += 1   # synthesis failed / TTS unavailable
+                continue
             utt = item[2]
             # Expiry: drop stale messages.
             if (self._clock() - utt.created_at) > self._expiry_for(utt.priority):
@@ -311,11 +329,22 @@ class SpeechArbiter:
                     self.dropped_expired += 1
                     continue
             self._emit(utt, item[3])
+            # Single outlet: do not start the next clip while this one plays
+            # (sd.play() would silently cut it off). interrupt_all() ->
+            # player.stop() clears is_playing and releases this wait.
+            while not self._stop.is_set() and self.player.is_playing():
+                time.sleep(0.02)
 
     def _wait_for_gate(self, utt) -> bool:
         """Return True when the gate opens before expiry (else drop)."""
         deadline = utt.created_at + self._expiry_for(utt.priority)
+        epoch = self._epoch
         while not self._stop.is_set():
+            # PTT pressed (recording / interrupt_all) while we waited: this
+            # popped item is no longer in the heap, so drop it explicitly or it
+            # would be spoken over the driver's microphone.
+            if self._recording or self._epoch != epoch:
+                return False
             try:
                 if self._gate():
                     return True

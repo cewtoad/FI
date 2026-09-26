@@ -98,10 +98,13 @@ class VoiceApp:
         if action.kind == "start_recording":
             with self._lock:
                 if self._busy:
+                    self.ptt.reset()   # keep the controller in sync: we did not start
                     print("[voice] 正在处理上一个问题…", flush=True)
                     return
                 if not self._recording:
                     self._start_recording()
+                    if not self._recording:
+                        self.ptt.reset()   # start failed
         elif action.kind == "stop_recording":
             with self._lock:
                 if self._recording:
@@ -142,6 +145,10 @@ class VoiceApp:
         with self._lock:
             if self._recording:
                 print("[voice] 超时，自动停止", flush=True)
+                # The controller still thinks we are recording; without this
+                # the next toggle tap is a no-op "stop" and the driver must
+                # press twice to start a new question.
+                self.ptt.reset()
                 self._stop_and_answer_locked()
 
     def _stop_and_answer_locked(self) -> None:

@@ -132,6 +132,11 @@ class TelemetryState:
         # under a lock instead of the live (mutating) structures. This removes
         # the reader/writer races in the web and voice paths.
         self._snap_lock = threading.Lock()
+        # Serialises writers (process) with snapshot builds. snapshot() on a
+        # reader thread rebuilds from the LIVE structures whenever the state is
+        # dirty (i.e. almost always while packets flow), so without this lock
+        # readers deep-copy dicts/deques the RX thread is mutating.
+        self._state_lock = threading.RLock()
         self._frozen: Dict[str, Any] = {}
         self._frozen_at: float = 0.0
         self._snap_dirty: bool = True
@@ -208,19 +213,20 @@ class TelemetryState:
         allowed to escape and kill the receive loop. F1 updates can ship new
         fields/enums that older handlers don't expect.
         """
-        try:
-            self._dispatch(packet)
-        except Exception as e:  # noqa: BLE001 - intentionally broad
-            pid = getattr(getattr(packet, "m_header", None), "m_packetId", "?")
-            key = f"__ERROR__{pid}"
-            self.packet_errors[key] = self.packet_errors.get(key, 0) + 1
-            if self._error_logger is not None:
-                self._error_logger.warning("state.process failed for %s: %r", pid, e)
-        finally:
-            # Live state changed: the frozen snapshot is now stale. The
-            # receiver thread rebuilds it (throttled); direct callers get a
-            # fresh build on the next snapshot().
-            self.mark_dirty()
+        with self._state_lock:
+            try:
+                self._dispatch(packet)
+            except Exception as e:  # noqa: BLE001 - intentionally broad
+                pid = getattr(getattr(packet, "m_header", None), "m_packetId", "?")
+                key = f"__ERROR__{pid}"
+                self.packet_errors[key] = self.packet_errors.get(key, 0) + 1
+                if self._error_logger is not None:
+                    self._error_logger.warning("state.process failed for %s: %r", pid, e)
+            finally:
+                # Live state changed: the frozen snapshot is now stale. The
+                # receiver thread rebuilds it (throttled); direct callers get a
+                # fresh build on the next snapshot().
+                self.mark_dirty()
 
     def _dispatch(self, packet) -> None:
         header = packet.m_header
@@ -1197,11 +1203,12 @@ class TelemetryState:
             return
         if not force and (now - self._frozen_at) < (1.0 / self.SNAPSHOT_HZ):
             return
-        frozen = self._build_snapshot()
-        with self._snap_lock:
-            self._frozen = frozen
-            self._frozen_at = now
-            self._snap_dirty = False
+        with self._state_lock:   # no writer can run while we copy live state
+            frozen = self._build_snapshot()
+            with self._snap_lock:
+                self._frozen = frozen
+                self._frozen_at = now
+                self._snap_dirty = False
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a frozen state snapshot (deep copy, safe to read anywhere).

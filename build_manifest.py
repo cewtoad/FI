@@ -91,6 +91,9 @@ HIDDEN_IMPORT_MODULES = [
 # Read-only resource directories shipped as-is.
 RESOURCE_DIRS = ["lib", "data"]
 
+# Modules excluded from the core PyInstaller build (kept out of the light pack).
+PYINSTALLER_EXCLUDES = ["tkinter", "matplotlib", "faster_whisper", "ctranslate2"]
+
 # Optional voice-model directory (Piper). Copied when present; the pack is
 # still valid without it (Piper simply reports unavailable).
 OPTIONAL_RESOURCE_DIRS = ["piper_models"]
@@ -152,11 +155,31 @@ def full_copy(dest: Path) -> int:
     return count
 
 
+def pyinstaller_args() -> list:
+    """The full PyInstaller argument list for the core (onedir) build.
+
+    Emitted one arg per line so both build_release.ps1 and release.yml consume
+    the SAME list instead of drifting (the CI build once lost --add-data data).
+    """
+    out = ["--noconfirm", "--clean", "--onedir", "--noupx",
+           "--name", "F1Engineer", "--version-file", "version_info.txt",
+           "--paths", "."]
+    for m in PYINSTALLER_EXCLUDES:
+        out += ["--exclude-module", m]
+    if (ROOT / "data").is_dir():
+        out += ["--add-data", "data;data"]
+    for m in HIDDEN_IMPORT_MODULES:
+        out += ["--hidden-import", m]
+    out.append("FI.py")
+    return out
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="F1_TR build manifest helper")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
     sub.add_parser("hidden-imports")
+    sub.add_parser("pyinstaller-args")
     full = sub.add_parser("full-copy")
     full.add_argument("--dest", required=True)
     args = p.parse_args()
@@ -167,6 +190,9 @@ def main() -> int:
     elif args.cmd == "hidden-imports":
         for name in HIDDEN_IMPORT_MODULES:
             print(name)
+    elif args.cmd == "pyinstaller-args":
+        for a in pyinstaller_args():
+            print(a)
     elif args.cmd == "full-copy":
         n = full_copy(Path(args.dest))
         print(f"copied {n} files into {args.dest}")

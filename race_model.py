@@ -28,6 +28,15 @@ _log = logging.getLogger("f1_tr.race_model")
 
 TYRE_WEAR_LIMIT_DEFAULT = 70.0
 
+# str(SafetyCarType.X) is the enum NAME (lib/f1_types/base_pkt.py __str__), e.g.
+# "NO_SAFETY_CAR". Keep the spaced spellings for old fixtures / recordings.
+_NO_SC = frozenset({"", "0", "NONE", "NO_SAFETY_CAR", "NO SAFETY CAR",
+                    "FORMATION_LAP", "FORMATION LAP"})
+
+
+def _sc_active(value) -> bool:
+    return str(value or "").strip().upper() not in _NO_SC
+
 
 def _linreg(xs: List[float], ys: List[float]):
     """Return (slope, intercept) via least squares; (0, mean) if degenerate."""
@@ -80,8 +89,10 @@ class RaceModel:
             self.latest = state
 
     def _compute(self, snap: Dict[str, Any]) -> RaceModelState:
-        session = snap.get("session", {}) or {}
         latest = snap.get("latest", {}) or {}
+        # The real TelemetryState snapshot keeps the Session-packet fields under
+        # latest.session; top-level "session" only has uid/type/track/total_laps.
+        session = {**(snap.get("session") or {}), **(latest.get("session") or {})}
         lap = latest.get("lap", {}) or {}
         status = latest.get("status", {}) or {}
         fuel = snap.get("fuel", {}) or {}
@@ -94,11 +105,11 @@ class RaceModel:
         stint = self._compute_stint(samples)
         ahead = self._compute_gap(samples, "ahead")
         behind = self._compute_gap(samples, "behind")
-        pit_window = self._compute_pit_window(session, lap, status)
-        rain_eta = self._compute_rain_eta(session)
+        pit_window = self._compute_pit_window(session, lap)
+        rain_eta = self._compute_rain_eta(session, self._rain_threshold())
 
         tyre_laps_to_limit = None
-        if stint is not None:
+        if stint is not None and stint.projected_life_laps is not None:
             tyre_laps_to_limit = max(0.0, stint.projected_life_laps)
 
         fuel_laps_left = None
@@ -111,9 +122,8 @@ class RaceModel:
         field_best, pole = self._field_best(snap)
         flags = {
             "safety_car": (session.get("safety_car_status") or ""),
-            "safety_car_active": str(session.get("safety_car_status", "")).upper()
-            not in ("", "NO SAFETY CAR", "NONE", "0"),
-            "player_in_yellow_zone": self._player_in_yellow(snap),
+            "safety_car_active": _sc_active(session.get("safety_car_status")),
+            "player_in_yellow_zone": self._player_in_yellow(snap, session),
             "session_time_left_s": session.get("session_time_left_s"),
         }
         return RaceModelState(
@@ -177,10 +187,10 @@ class RaceModel:
             ys = [float(s["lap_time_ms"]) / 1000.0 for s in pace]
             pace_rate, _ = _linreg(xs, ys)
 
-        if wear_rate > 0:
-            projected = (self._wear_limit() - wear_now) / wear_rate
-        else:
-            projected = float("inf")
+        # None = unknown (no measurable wear yet). Never emit inf: json.dumps
+        # turns it into the invalid token `Infinity` (/api/state) and TTS says "inf".
+        projected = ((self._wear_limit() - wear_now) / wear_rate
+                     if wear_rate > 0 else None)
         return Stint(
             index=self._stint_index(samples, start),
             start_lap=int(stint_samples[0].get("lap_num") or 0),
@@ -189,8 +199,7 @@ class RaceModel:
             wear_rate_pct_per_lap=round(wear_rate, 4),
             wear_now_pct=round(wear_now, 2),
             pace_degradation_s_per_lap=round(pace_rate, 4),
-            projected_life_laps=(round(projected, 1) if projected != float("inf")
-                                 else float("inf")),
+            projected_life_laps=(round(projected, 1) if projected is not None else None),
         )
 
     @staticmethod
@@ -207,8 +216,7 @@ class RaceModel:
 
     @staticmethod
     def _sc_lap(s: Dict[str, Any]) -> bool:
-        sc = str(s.get("safety_car") or "").upper()
-        return sc not in ("", "NO SAFETY CAR", "NONE", "0")
+        return _sc_active(s.get("safety_car"))
 
     # ---------------------------------------------------------------- gaps
 
@@ -251,7 +259,7 @@ class RaceModel:
 
     # ------------------------------------------------------------ pit window
 
-    def _compute_pit_window(self, session, lap, status) -> PitWindow:
+    def _compute_pit_window(self, session, lap) -> PitWindow:
         ideal = session.get("pit_window_ideal_lap")
         latest = session.get("pit_window_latest_lap")
         rejoin = session.get("pit_window_rejoin_position")
@@ -266,7 +274,8 @@ class RaceModel:
                 st = "last_lap"
             else:
                 st = "open"
-            if status.get("pit_status") not in (None, "NONE") and cur >= ideal:
+            # pit_status lives in latest.lap (state.py _on_lap_data), not status.
+            if lap.get("pit_status") not in (None, "NONE") and cur >= ideal:
                 st = "done"
         return PitWindow(state=st,
                          ideal_lap=ideal if isinstance(ideal, int) else 0,
@@ -275,12 +284,22 @@ class RaceModel:
 
     # ---------------------------------------------------------------- weather
 
+    def _rain_threshold(self) -> float:
+        if self._cfg is None:
+            return 50.0
+        try:
+            return self._cfg.get_float("RADIO_ALERT_RAIN_PCT", 50.0)
+        except Exception:  # noqa: BLE001
+            return 50.0
+
     @staticmethod
-    def _compute_rain_eta(session) -> Optional[float]:
+    def _compute_rain_eta(session, threshold: float = 50.0) -> Optional[float]:
+        # First sample whose probability actually crosses the alert threshold:
+        # a tiny early sample (e.g. 5%) must not mask a later 80% forecast.
         forecast = session.get("weather_forecast") or []
         for entry in forecast:
             rain = entry.get("rain_pct") or 0
-            if rain > 0:
+            if rain >= threshold:
                 return float(entry.get("time_offset_min") or 0)
         return None
 
@@ -297,8 +316,7 @@ class RaceModel:
         return best, best
 
     @staticmethod
-    def _player_in_yellow(snap) -> bool:
-        session = snap.get("session", {}) or {}
+    def _player_in_yellow(snap, session) -> bool:
         zones = session.get("marshal_yellow_zones") or []
         if not zones:
             return False

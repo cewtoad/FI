@@ -43,10 +43,15 @@ class RadioDirector:
         self._last_event_seq = 0
         self._alerts_this_lap = 0
         self._lap_marker = None
-        self._last_alert_at = 0.0
+        # -inf, not 0.0: with a clock that starts near 0 (tests, fresh boot of
+        # an injected clock) the first alerts were swallowed by the min-gap.
+        self._last_alert_at = float("-inf")
         self.total_alerts = 0
         # Persist last RaceModelState between ticks (for transitions).
         self._prev_model = None
+        # Cache the name renderer: building one reloads driver_names.json from
+        # disk, and the old code rebuilt it on every 2Hz tick.
+        self._name_renderer = name_renderer
         # Quiet-mode runtime override (T5.8), in-memory only.
         self._quiet_override: Optional[bool] = None
 
@@ -112,11 +117,13 @@ class RadioDirector:
         # Allow P0 through even in quiet mode (safety). Everything else is off.
         quiet = self._quiet_active()
 
+        names = self.names or self._name_renderer
+        if names is None:
+            names = names_mod.NameRenderer(str(self._cfg_get("DRIVER_NAME_STYLE", "zh")))
+            self._name_renderer = names
         ctx = RuleCtx(prev=prev, curr=curr, snapshot=snapshot,
                       new_events=new_events, now=now,
-                      settings=self._cfg,
-                      names=self.names or names_mod.NameRenderer(
-                          str(self._cfg_get("DRIVER_NAME_STYLE", "zh"))))
+                      settings=self._cfg, names=names)
 
         emitted = 0
         for rule in self.rules:
@@ -153,11 +160,13 @@ class RadioDirector:
         return last is None or (now - last) >= rule.cooldown_s
 
     def _accept(self, alert: Alert, now: float) -> bool:
-        # Dedup: same key not repeated within its rule cooldown.
+        # Dedup: a given dedup_key fires ONCE per session (rules encode the
+        # one-shot scope into the key: lap_summary_5, sc_deployed, pos_42...).
+        # Previously this only suppressed within the rule cooldown, so a
+        # persistent condition (wing damage, final lap) repeated every cooldown
+        # for the rest of the race.
         key = alert.dedup_key or alert.id
-        last = self._fired_keys.get(key)
-        cooldown = self._rule_cooldown(alert.id)
-        if last is not None and (now - last) < cooldown:
+        if key in self._fired_keys:
             return False
         # Per-lap cap (non-P0 only).
         lap = (self._snap_lap or {}).get("current_lap_num")

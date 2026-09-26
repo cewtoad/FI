@@ -42,7 +42,13 @@ class Ticker:
 
     def run_once(self) -> None:
         """Run every handler once against a fresh snapshot (tests use this)."""
-        snapshot = self._snapshot_provider() if self._snapshot_provider else {}
+        try:
+            snapshot = self._snapshot_provider() if self._snapshot_provider else {}
+        except Exception as e:  # noqa: BLE001 - an escaped error would kill the thread
+            self.errors["__snapshot__"] = self.errors.get("__snapshot__", 0) + 1
+            self._log.warning("ticker snapshot failed: %r", e)
+            self.ticks += 1
+            return
         now = self._clock()
         t0 = self._clock()
         for name, handler in list(self._handlers.items()):

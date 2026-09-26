@@ -112,25 +112,27 @@ class SapiTTS(TTSEngine):
         import tempfile
         with tempfile.TemporaryDirectory(prefix="f1tr_tts_") as td:
             out = os.path.join(td, "out.wav")
-            # PowerShell single-quoted strings escape ' as ''
-            safe_voice = self.voice.replace("'", "''")
-            safe_text = text.replace("'", "''").replace("\r", " ").replace("\n", " ")
-            select = (f"try {{ $s.SelectVoice('{safe_voice}') }} catch {{ }}"
-                      if self.voice else "")
-            set_rate = (f"try {{ $s.Rate = {self.rate} }} catch {{ }}"
+            # Untrusted text (online player names, LLM output) is passed via
+            # environment variables, never spliced into the script: PowerShell
+            # also treats U+2018/U+2019/U+201A/U+201B as single quotes, so the
+            # old ''-escaping allowed breaking out of the string literal.
+            set_rate = (f"try {{ $s.Rate = {int(self.rate)} }} catch {{ }}"
                         if self.rate is not None else "")
             script = (
                 "Add-Type -AssemblyName System.Speech\n"
                 "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
-                f"{select}\n"
+                "if ($env:F1TR_TTS_VOICE) { try { $s.SelectVoice($env:F1TR_TTS_VOICE) } catch { } }\n"
                 f"{set_rate}\n"
-                f"$s.SetOutputToWaveFile('{out}')\n"
-                f"$s.Speak('{safe_text}')\n"
+                "$s.SetOutputToWaveFile($env:F1TR_TTS_OUT)\n"
+                "$s.Speak($env:F1TR_TTS_TEXT)\n"
                 "$s.Dispose()\n")
+            env = dict(os.environ,
+                       F1TR_TTS_TEXT=text.replace("\r", " ").replace("\n", " "),
+                       F1TR_TTS_VOICE=self.voice or "", F1TR_TTS_OUT=out)
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive",
                  "-ExecutionPolicy", "Bypass", "-Command", script],
-                capture_output=True, timeout=self.timeout)
+                capture_output=True, timeout=self.timeout, env=env)
             if proc.returncode != 0 or not os.path.exists(out):
                 err = proc.stderr.decode("utf-8", errors="replace")[:200]
                 raise RuntimeError(f"SAPI TTS failed: {err}")

@@ -110,7 +110,8 @@ class Summariser:
             "sector3": _fmt_ms(lap.get("sector3_ms")),
             "gap_to_front": "领跑" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_car_in_front_ms")),
             "gap_to_leader": "领先全场" if pos == 1 else _fmt_gap_signed(lap.get("delta_to_race_leader_ms")),
-            "session_time_left_s": session.get("session_time_left_s"),
+            "session_time_left_s": session.get("session_time_left_s",
+                                               (latest.get("session") or {}).get("session_time_left_s")),
             "speed_kph": car.get("speed_kph"),
             "gear": car.get("gear"),
             "tyre_compound": status.get("tyre_compound_actual"),
@@ -246,7 +247,10 @@ class Summariser:
             facts["pit.latest_lap"] = pw.get("latest_lap")
             facts["pit.rejoin_position"] = pw.get("rejoin_position")
         if rm.get("fuel_laps_left") is not None:
-            facts["fuel.laps_left"] = rm.get("fuel_laps_left")
+            # race laps remaining (NOT the telemetry fuel range, which is the
+            # flat fact "fuel_laps_left"); keep the names distinct so the LLM
+            # never sees two contradictory "laps left" values.
+            facts["fuel.laps_to_end"] = rm.get("fuel_laps_left")
         if rm.get("rain_eta_min") is not None:
             facts["weather.rain_eta_min"] = rm.get("rain_eta_min")
         if rm.get("field_best_lap_ms") is not None:

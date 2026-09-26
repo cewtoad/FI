@@ -33,9 +33,16 @@ _force_utf8_stdout()
 import webbrowser
 
 
-def _port_busy(port: int, host: str = "127.0.0.1") -> bool:
-    """True when something is already listening on ``port`` (e.g. SimHub)."""
+def _port_busy(port: int, host: str = "0.0.0.0") -> bool:
+    """True when something is already listening on ``port`` (e.g. SimHub).
+
+    Probe the wildcard address with SO_EXCLUSIVEADDRUSE: on Windows a plain
+    bind to 127.0.0.1 succeeds even while another process holds 0.0.0.0:port,
+    so the old probe missed SimHub / a second instance bound to 0.0.0.0.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         try:
             s.bind((host, port))
         except OSError:
