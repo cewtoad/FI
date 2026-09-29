@@ -141,9 +141,6 @@ class TelemetryState:
         # behind a stale snapshot must produce ONE rebuild, not N (each one
         # deep-copies everything under _state_lock and stalls the RX loop).
         self._build_lock = threading.Lock()
-        # Last time the receiver path refreshed the snapshot (non-force). While
-        # it is recent, readers reuse the frozen copy instead of rebuilding.
-        self._publisher_at: float = 0.0
         # Cached straight-gate thresholds (see _straight_thresholds).
         self._straight_cfg: Optional[tuple] = None
         self._frozen: Dict[str, Any] = {}
@@ -1234,40 +1231,29 @@ class TelemetryState:
                 self._frozen = frozen
                 self._frozen_at = now
                 self._snap_dirty = False
-                if not force:
-                    # The publisher (receiver thread) is alive and fresh.
-                    self._publisher_at = now
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a frozen state snapshot (deep copy, safe to read anywhere).
 
-        While the receiver thread is publishing (it republished at SNAPSHOT_HZ
-        as packets flow), readers share that frozen copy — up to 1/SNAPSHOT_HZ
-        stale. This is the point of the design: a reader-triggered rebuild
-        deep-copies the whole state under ``_state_lock`` and stalls the
-        receive loop, so with N polling readers it used to cost N rebuilds
-        (and lost packets) per cycle. When no fresh publisher copy exists
-        (direct drivers / tests, or a stalled receiver), a rebuild still
-        happens on demand, single-flighted through ``_build_lock``.
+        Correctness first: if the live state changed since the frozen copy was
+        built (``_snap_dirty``), the caller gets a FRESH copy (read-your-
+        writes). Rebuilds are single-flighted through ``_build_lock`` so N
+        concurrent readers cause at most ONE rebuild; once a rebuild finishes
+        the waiting readers reuse it. When the state is clean (the receiver
+        just published and nothing changed since), the frozen copy is reused
+        with no copy at all — that is the cheap path that keeps frequent
+        polling from stalling the receive loop.
         """
-        if self._publisher_fresh():
+        with self._snap_lock:
+            if self._frozen and not self._snap_dirty:
+                return self._frozen           # clean: reuse, zero cost
+        with self._build_lock:                # one rebuild at a time
             with self._snap_lock:
-                frozen = self._frozen
-            if frozen:
-                return frozen
-        with self._build_lock:      # one rebuild at a time across all readers
-            if self._publisher_fresh():
-                with self._snap_lock:
-                    frozen = self._frozen
-                if frozen:
-                    return frozen   # someone rebuilt it while we waited
+                if self._frozen and not self._snap_dirty:
+                    return self._frozen       # someone rebuilt while we waited
             self.refresh_snapshot(force=True)
-            return self._frozen
-
-    def _publisher_fresh(self) -> bool:
-        """True while the receiver path has refreshed the snapshot recently."""
-        return (self._publisher_at > 0.0
-                and (self._clock() - self._publisher_at) < 2.0)
+            with self._snap_lock:
+                return self._frozen
 
     def _build_snapshot(self) -> Dict[str, Any]:
         """Build a deep-copied snapshot from the live state (writer thread)."""

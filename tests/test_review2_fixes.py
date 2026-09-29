@@ -118,14 +118,43 @@ def test_snapshot_rebuilds_without_publisher():
     assert s1 is not s2          # read-your-writes for direct drivers/tests
 
 
-def test_snapshot_reuses_fresh_publisher_copy():
+def test_snapshot_reuses_clean_frozen_copy():
     from state import TelemetryState
     st = TelemetryState()
-    st.refresh_snapshot()        # simulates the receiver thread publishing
-    st.mark_dirty()              # packets arrived after the published copy
+    st.refresh_snapshot()        # receiver published; state is clean
     a = st.snapshot()
     b = st.snapshot()
-    assert a is b                # readers share the frozen copy (no rebuild)
+    assert a is b                # clean -> readers share, no rebuild
+
+
+def test_snapshot_is_fresh_when_dirty_even_after_publish():
+    """Regression: a stale publisher copy must NOT be served once the live
+    state changed (mark_dirty). The old 'publisher fresh within 2s' shortcut
+    returned a copy missing the newest packets."""
+    from state import TelemetryState
+    st = TelemetryState()
+    st.refresh_snapshot()        # publish a copy
+    stale = st.snapshot()
+    st.mark_dirty()              # packets arrived after that copy
+    fresh = st.snapshot()
+    assert fresh is not stale    # must rebuild, not reuse the stale copy
+
+
+def test_snapshot_reflects_full_burst():
+    """End-to-end: a fast packet burst then a read must see ALL of it (the
+    receiver throttles frozen rebuilds to 2Hz, so a stale copy was served)."""
+    from fake_data import PACKET_FORMAT, make_lap
+    from lib.f1_types import F1PacketType
+    from receiver import PACKETS_CONSUMED, TelemetryReceiver
+    from state import TelemetryState
+
+    st = TelemetryState()
+    recv = TelemetryReceiver(st, port=0, interested=PACKETS_CONSUMED)
+    for i in range(30):
+        recv._handle_raw(make_lap(PACKET_FORMAT, F1PacketType.LAP_DATA, 9,
+                                  i + 1, i * 0.8, 0, 1000, 100.0, 100.0, 1, 5, 0))
+    assert st.packet_counts.get("LAP_DATA") == 30
+    assert st.snapshot()["packet_counts"].get("LAP_DATA") == 30
 
 
 def test_flashback_resets_position_baseline():
