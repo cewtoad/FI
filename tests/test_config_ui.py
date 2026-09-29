@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import config_ui
@@ -18,14 +19,24 @@ def _serve():
 
 
 def _req(port, method, path, body=None):
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    headers = {"Content-Type": "application/json"} if body is not None else {}
-    conn.request(method, path, body=json.dumps(body) if body is not None else None,
-                 headers=headers)
-    resp = conn.getresponse()
-    data = resp.read().decode("utf-8")
-    conn.close()
-    return resp.status, data
+    # Retry the connection setup a couple of times: on a busy machine a freshly
+    # bound ephemeral server can momentarily refuse the first connect.
+    last = None
+    for _ in range(3):
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            headers = {"Content-Type": "application/json"} if body is not None else {}
+            conn.request(method, path,
+                         body=json.dumps(body) if body is not None else None,
+                         headers=headers)
+            resp = conn.getresponse()
+            data = resp.read().decode("utf-8")
+            conn.close()
+            return resp.status, data
+        except (ConnectionError, OSError) as e:
+            last = e
+            time.sleep(0.2)
+    raise last
 
 
 def test_schema_endpoint_lists_settings():
