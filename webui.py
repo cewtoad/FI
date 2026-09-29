@@ -186,6 +186,20 @@ PAGE = r"""<!doctype html>
         • <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。
       </div>
     </details>
+    <details class="setupbox" id="featBox">
+      <summary>🎚 功能开关（主动播报 / 语音 / 推演 / 复盘 …）</summary>
+      <div style="font-size:12px;color:var(--dim);margin-top:6px;">
+        改这里立即生效并写入 <code>.env</code>（部分项需重启）。
+      </div>
+      <div id="featForm" style="margin-top:8px;"></div>
+      <div class="row2" style="margin-top:6px;">
+        <button id="featSave">保存开关</button>
+        <a href="http://127.0.0.1:8766" target="_blank"
+           style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;">
+           打开完整设置页（语音包 / 按键 / 高级）→</a>
+      </div>
+      <div class="meta" id="featMsg"></div>
+    </details>
   </div>
 </div>
 <div class="wrap">
@@ -321,6 +335,68 @@ async function saveSetup(){
 document.getElementById("setSave").onclick = saveSetup;
 document.getElementById("setClose").onclick = () => { document.getElementById("setup").style.display = "none"; };
 document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); document.getElementById("setup").style.display = "block"; window.scrollTo(0,0); };
+// ---- feature toggles (schema-driven) ----
+let featSchema = null;
+async function loadFeatures(){
+  if (featSchema) return;
+  try {
+    const r = await fetch("/api/settings"); const d = await r.json();
+    featSchema = d.settings || [];
+    const groups = {};
+    for (const s of featSchema){ (groups[s.group] = groups[s.group] || []).push(s); }
+    const gname = {ai:"AI",audio:"音频设备",voice:"语音/按键",radio:"主动播报",model:"推演/轮胎",debrief:"赛后复盘",general:"通用"};
+    let html = "";
+    for (const g of Object.keys(groups)){
+      html += `<div style="color:var(--accent);font-size:12px;margin:8px 0 2px;">${gname[g]||g}</div>`;
+      for (const s of groups[g]){
+        const id = "f_" + s.key;
+        let input;
+        if (s.type === "bool"){
+          input = `<select id="${id}"><option value="1">开</option><option value="0">关</option></select>`;
+        } else if (s.type === "enum"){
+          input = `<select id="${id}">` + s.choices.map(c=>`<option>${c}</option>`).join("") + `</select>`;
+        } else if (s.type === "int" || s.type === "float"){
+          input = `<input id="${id}" type="number" step="${s.type==="float"?"0.1":"1"}" value="${s.value}">`;
+        } else if (s.secret){
+          input = `<input id="${id}" type="password" placeholder="（已隐藏，留空不改）" style="width:100%">`;
+        } else {
+          input = `<input id="${id}" value="${s.value}">`;
+        }
+        html += `<div class="row2" style="align-items:center;margin:3px 0;">`
+              + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${s.label||s.key}</label>`
+              + `<span style="flex:1">${input}</span></div>`;
+      }
+    }
+    document.getElementById("featForm").innerHTML = html || "<span class='meta'>无可调项</span>";
+    for (const s of featSchema){
+      const el = document.getElementById("f_"+s.key); if (!el) continue;
+      if (s.type === "bool"){
+        const v = String(s.value).toLowerCase();
+        el.value = (v==="1"||v==="true"||v==="on") ? "1" : "0";
+      } else if (!s.secret){ el.value = s.value == null ? "" : s.value; }
+    }
+  } catch(e){}
+}
+async function saveFeatures(){
+  const msg = document.getElementById("featMsg");
+  if (!featSchema){ return; }
+  msg.className = "meta"; msg.textContent = "保存中…";
+  const updates = {};
+  for (const s of featSchema){
+    const el = document.getElementById("f_"+s.key); if (!el) continue;
+    if (s.secret && !el.value) continue;   // don't clobber a hidden secret
+    updates[s.key] = el.value;
+  }
+  try {
+    const r = await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(updates)});
+    const d = await r.json();
+    const errs = Object.keys(d.errors||{});
+    if (errs.length){ msg.className = "meta bad"; msg.textContent = "部分失败：" + JSON.stringify(d.errors); }
+    else { msg.className = "meta ok"; msg.textContent = "✓ 已保存并生效"; }
+  } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
+}
+document.getElementById("featBox").addEventListener("toggle", (ev) => { if (ev.target.open) loadFeatures(); });
+document.getElementById("featSave").onclick = saveFeatures;
 // ---- audio devices: follow-system by default, pin optional ----
 async function loadAudio(){
   try {
@@ -578,6 +654,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "current": get_config().get("PROFILE", "") or "standard",
                 "profiles": sorted(PROFILES),
             })
+        elif self.path == "/api/settings":
+            from config_ui import _settings_payload
+            self._send_json(200, {"settings": _settings_payload()})
         elif self.path == "/api/export":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             rec = ctx["recorder"]
@@ -623,7 +702,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/api/ask_voice":
             self._ask_voice()
             return
-        if self.path in ("/api/llm", "/api/audio") and not self._local_only():
+        if self.path in ("/api/llm", "/api/audio", "/api/settings") and not self._local_only():
             self._send_json(403, {"error": "config changes are local-only"})
             return
         if self.path == "/api/llm":
@@ -634,6 +713,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/profile":
             self._set_profile()
+            return
+        if self.path == "/api/settings":
+            self._set_settings()
             return
         if self.path != "/api/ask":
             self._send(404, b"not found", "text/plain")
@@ -721,6 +803,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         get_config().set_runtime("PROFILE", name)
         self._send_json(200, {"current": name})
+
+    def _set_settings(self) -> None:
+        """POST /api/settings - batch feature toggles (validated + persisted)."""
+        body = self._read_json()
+        if body is None:
+            return
+        from config_ui import apply_settings
+        self._send_json(200, apply_settings(body))
 
     def _ask_voice(self) -> None:
         """POST /api/ask_voice - raw audio body -> {question, answer, audio}."""
