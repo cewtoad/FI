@@ -37,7 +37,7 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.2"
 _RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
 _version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
@@ -145,46 +145,52 @@ PAGE = r"""<!doctype html>
 <body>
 <div class="wrap" style="grid-template-columns:1fr;">
   <div class="setup" id="update" style="background:#16293a;border-color:#2b5a7a;display:none;">
-    <span style="color:#8ecbff;">发现新版本 <b id="newver"></b>（当前 <span id="curver"></span>）</span>
+    <span style="color:#8ecbff;"><span data-i18n="update.found">发现新版本</span> <b id="newver"></b><span id="updCur"></span></span>
     <a id="dlLink" href="https://github.com/cewtoad/FI/releases/latest" target="_blank"
-       style="color:var(--accent);margin-left:8px;">前往下载 →</a>
+       style="color:var(--accent);margin-left:8px;" data-i18n="update.dl">前往下载 →</a>
   </div>
   <div class="setup" id="setup" style="display:none">
-    <h2>⚙ AI 设置（不填也能用本地问答）
-      <a href="#" id="setupClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;">关闭 ✕</a>
+    <h2>⚙ <span data-i18n="ai.title">AI 设置（不填也能用本地问答）</span>
+      <a href="#" id="setupClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;" data-i18n="common.close">关闭 ✕</a>
     </h2>
-    <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">
-      支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。
-      名次、圈速、油量、胎温、损伤等高频问题**无需 key** 即可回答。
+    <div style="font-size:12px;color:var(--dim);margin-bottom:6px;" data-i18n="ai.desc">
+      支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。
     </div>
     <div class="row2">
-      <input type="text" id="setBase" placeholder="Base URL（如 https://api.deepseek.com）">
-      <input type="text" id="setModel" placeholder="模型（如 deepseek-flash）">
+      <input type="text" id="setBase" placeholder="Base URL（如 https://api.deepseek.com）" data-i18n-ph="ai.base">
+      <input type="text" id="setModel" placeholder="模型（如 deepseek-flash）" data-i18n-ph="ai.model">
     </div>
-    <input type="password" id="setKey" placeholder="API Key（sk-...）">
+    <input type="password" id="setKey" placeholder="API Key（sk-...）" data-i18n-ph="ai.key">
     <div class="row2" style="margin-top:6px;">
-      <button id="setSave">保存并测试连接</button>
+      <button id="setSave" data-i18n="ai.save">保存并测试连接</button>
     </div>
     <div class="meta" id="setMsg"></div>
   </div>
   <div class="setup" id="featBox" style="display:none">
-    <h2>🎚 功能设置
-      <a href="#" id="featClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;">关闭 ✕</a>
+    <h2>🎚 <span data-i18n="feat.title">功能设置</span>
+      <a href="#" id="featClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;" data-i18n="common.close">关闭 ✕</a>
     </h2>
     <details class="setupbox">
-      <summary>🎤🔊 语音设备（默认跟随系统正在使用的设备）</summary>
-      <div class="row2" style="margin-top:6px;">
+      <summary data-i18n="audio.title">🎤🔊 语音设备（默认跟随系统正在使用的设备）</summary>
+      <div class="row2" style="margin-top:6px;align-items:center;">
+        <span style="font-size:12px;color:var(--dim);flex:0 0 62px;" data-i18n="audio.mic">麦克风</span>
         <select id="setMic" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;"></select>
+      </div>
+      <div class="row2" style="margin-top:6px;align-items:center;">
+        <span style="font-size:12px;color:var(--dim);flex:0 0 62px;" data-i18n="audio.spk">播报输出</span>
         <select id="setSpk" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;"></select>
       </div>
-      <div style="font-size:12px;color:var(--dim);margin-top:4px;">
-        默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效。
-        当前使用：<span id="audNow" style="color:var(--txt);"></span>
+      <div class="row2" style="margin-top:6px;">
+        <button id="audRefresh" style="padding:5px 12px;" data-i18n="audio.refresh">🔄 重新检测设备</button>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:6px;">
+        <span data-i18n="audio.note">默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效（也可在此固定）。</span>
+        <br><span data-i18n="audio.now">当前使用：</span><span id="audNow" style="color:var(--txt);"></span>
       </div>
     </details>
     <details class="setupbox">
-      <summary>游戏内 UDP 遥测怎么设？</summary>
-      <div style="font-size:12px;line-height:1.9;margin-top:6px;">
+      <summary data-i18n="udp.title">游戏内 UDP 遥测怎么设？</summary>
+      <div style="font-size:12px;line-height:1.9;margin-top:6px;" data-i18n-html="udp.body">
         游戏 <b>设置 → UDP 遥测</b>：<br>
         • UDP 遥测：<code>开启</code><br>
         • UDP IP：<code>127.0.0.1</code>　• UDP 端口：<code>20777</code><br>
@@ -192,12 +198,14 @@ PAGE = r"""<!doctype html>
         • <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。
       </div>
     </details>
-    <div style="font-size:12px;color:var(--dim);margin:10px 0 2px;">主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 <code>.env</code>（部分项需重启）。</div>
+    <div style="font-size:12px;color:var(--dim);margin:10px 0 2px;" data-i18n="feat.hint">
+      主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 .env（部分项需重启）。
+    </div>
     <div id="featForm" style="margin-top:6px;"></div>
     <div class="row2" style="margin-top:6px;">
-      <button id="featSave">保存开关</button>
+      <button id="featSave" data-i18n="feat.save">保存开关</button>
       <a href="http://127.0.0.1:8766" target="_blank"
-         style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;">
+         style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;" data-i18n="feat.full">
          打开完整设置页(语音包 / 按键 / 高级) →</a>
     </div>
     <div class="meta" id="featMsg"></div>
@@ -205,10 +213,12 @@ PAGE = r"""<!doctype html>
 </div>
 <div class="wrap">
   <div class="panel">
-    <h1>遥测面板 <span id="conn" class="badge wait">等待数据</span>
+    <h1><span data-i18n="panel.telemetry">遥测面板</span> <span id="conn" class="badge wait" data-i18n="conn.wait">等待数据</span>
       <span style="float:right;font-size:12px;font-weight:400;">
-        <a href="#" id="openSet" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;">AI 设置</a>
-        <a href="#" id="openFeat" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;">功能设置</a>
+        <a href="#" id="langZh" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 8px;border-radius:8px;margin-left:6px;">中文</a>
+        <a href="#" id="langEn" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 8px;border-radius:8px;margin-left:4px;">EN</a>
+        <a href="#" id="openSet" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.ai">AI 设置</a>
+        <a href="#" id="openFeat" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.feat">功能设置</a>
       </span>
     </h1>
     <div id="alertbar" style="display:none"></div>
@@ -216,54 +226,148 @@ PAGE = r"""<!doctype html>
     <div class="notes" id="notes"></div>
     <div class="meta" id="meta"></div>
     <div style="margin-top:14px;">
-      <div style="color:var(--dim);font-size:12px;margin-bottom:6px;">全场排名</div>
+      <div style="color:var(--dim);font-size:12px;margin-bottom:6px;" data-i18n="panel.board">全场排名</div>
       <div id="board"></div>
     </div>
   </div>
   <div class="panel">
-    <h1>车队无线电
-      <a href="/api/export_txt" style="float:right;font-size:12px;font-weight:400;color:var(--accent);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;">导出TXT</a>
-      <a href="/api/export" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;">导出JSON</a>
+    <h1><span data-i18n="panel.radio">车队无线电</span>
+      <a href="/api/export_txt" style="float:right;font-size:12px;font-weight:400;color:var(--accent);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.exportTxt">导出TXT</a>
+      <a href="/api/export" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;" data-i18n="nav.exportJson">导出JSON</a>
     </h1>
     <div id="log"></div>
     <div class="qbar">
-      <input type="text" id="q" placeholder="问点什么…（例：我圈速多少）" autocomplete="off">
+      <input type="text" id="q" placeholder="问点什么…（例：我圈速多少）" data-i18n-ph="ask.ph" autocomplete="off">
       <button id="mic" class="mic" style="display:none" title="按住说话，松开发送">🎤</button>
-      <button id="send">问</button>
+      <button id="send" data-i18n="ask.send">问</button>
     </div>
     <div class="quick">
-      <button data-q="我当前圈速和最快圈差多少">圈速差</button>
-      <button data-q="我的轮胎情况怎么样">轮胎</button>
-      <button data-q="油量够跑完吗">油量</button>
-      <button data-q="我现在排第几">位置</button>
-      <button data-q="我哪里损失了时间">损失时间</button>
+      <button data-q="我当前圈速和最快圈差多少" data-i18n="q.lap">圈速差</button>
+      <button data-q="我的轮胎情况怎么样" data-i18n="q.tyre">轮胎</button>
+      <button data-q="油量够跑完吗" data-i18n="q.fuel">油量</button>
+      <button data-q="我现在排第几" data-i18n="q.pos">位置</button>
+      <button data-q="我哪里损失了时间" data-i18n="q.loss">损失时间</button>
     </div>
-    <div class="meta" id="voicehint" style="display:none">🎤 按住说话 · 松开发送 · Esc 取消</div>
-    <div class="meta">快捷键: Enter 发送</div>
+    <div class="meta" id="voicehint" style="display:none" data-i18n="ask.voicehint">🎤 按住说话 · 松开发送 · Esc 取消</div>
+    <div class="meta" data-i18n="ask.enter">快捷键: Enter 发送</div>
   </div>
 </div>
 <script>
+// ---- i18n (zh / en), persisted in localStorage as f1tr_lang ----
+const I18N = {
+  zh: {
+    "update.found":"发现新版本", "update.dl":"前往下载 →", "update.cur":"（当前 {v}）",
+    "common.close":"关闭 ✕", "common.on":"开", "common.off":"关",
+    "ai.title":"AI 设置（不填也能用本地问答）",
+    "ai.desc":"支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。",
+    "ai.base":"Base URL（如 https://api.deepseek.com）", "ai.model":"模型（如 deepseek-flash）",
+    "ai.key":"API Key（sk-...）", "ai.save":"保存并测试连接",
+    "ai.saving":"保存中…", "ai.testing":"已保存，测试连接中…",
+    "ai.ok":"✓ 连接成功，AI 已就绪", "ai.fail":"连接失败：{e}（本地问答仍可用）",
+    "feat.title":"功能设置", "feat.hint":"主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 .env（部分项需重启）。",
+    "feat.save":"保存开关", "feat.full":"打开完整设置页(语音包 / 按键 / 高级) →",
+    "feat.saving":"保存中…", "feat.saved":"✓ 已保存并生效", "feat.partial":"部分失败：",
+    "audio.title":"🎤🔊 语音设备（默认跟随系统正在使用的设备）",
+    "audio.mic":"麦克风", "audio.spk":"播报输出", "audio.refresh":"🔄 重新检测设备",
+    "audio.note":"默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效（也可在此固定）。",
+    "audio.now":"当前使用：", "audio.follow":"跟随系统当前设备", "audio.cur":"（当前: {n}）",
+    "audio.sysdefault":"（系统默认）", "audio.none":"无",
+    "udp.title":"游戏内 UDP 遥测怎么设？",
+    "udp.body":"游戏 <b>设置 → UDP 遥测</b>：<br>• UDP 遥测：<code>开启</code><br>• UDP IP：<code>127.0.0.1</code>　• UDP 端口：<code>20777</code><br>• UDP 赛制：<code>2026</code>（或与你游戏版本一致）<br>• <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。",
+    "panel.telemetry":"遥测面板", "panel.board":"全场排名", "panel.radio":"车队无线电",
+    "conn.wait":"等待数据", "conn.live":"比赛中",
+    "nav.ai":"AI 设置", "nav.feat":"功能设置", "nav.exportTxt":"导出TXT", "nav.exportJson":"导出JSON",
+    "ask.ph":"问点什么…（例：我圈速多少）", "ask.send":"问", "ask.voicehint":"🎤 按住说话 · 松开发送 · Esc 取消", "ask.enter":"快捷键: Enter 发送",
+    "q.lap":"圈速差", "q.tyre":"轮胎", "q.fuel":"油量", "q.pos":"位置", "q.loss":"损失时间",
+    "meta.packets":"已收 {a} 包 · 丢 {d} · 错误 {e}",
+    "board.h":"P 车手", "board.h2":"轮胎  落后", "board.lead":"领先",
+    "ui.noanswer":"" 
+  },
+  en: {
+    "update.found":"New version", "update.dl":"Download →", "update.cur":" (current {v})",
+    "common.close":"Close ✕", "common.on":"On", "common.off":"Off",
+    "ai.title":"AI settings (optional — local answers work without a key)",
+    "ai.desc":"Any OpenAI-compatible endpoint (DeepSeek / OpenAI / Moonshot / Qwen / local Ollama). Position, lap times, fuel, tyre temps and damage are answered locally without a key.",
+    "ai.base":"Base URL (e.g. https://api.deepseek.com)", "ai.model":"Model (e.g. deepseek-flash)",
+    "ai.key":"API Key (sk-...)", "ai.save":"Save & test connection",
+    "ai.saving":"Saving…", "ai.testing":"Saved, testing connection…",
+    "ai.ok":"✓ Connected, AI ready", "ai.fail":"Connection failed: {e} (local answers still work)",
+    "feat.title":"Feature settings", "feat.hint":"Radio / voice / race model / debrief — saved to .env and applied live (some need a restart).",
+    "feat.save":"Save", "feat.full":"Open full settings page (voice / keys / advanced) →",
+    "feat.saving":"Saving…", "feat.saved":"✓ Saved", "feat.partial":"Some failed: ",
+    "audio.title":"🎤🔊 Audio devices (default: follow the system device)",
+    "audio.mic":"Microphone", "audio.spk":"Speaker", "audio.refresh":"🔄 Re-scan devices",
+    "audio.note":"By default the current system device is used — plugging/switching the default takes effect on the next voice take (you can also pin one here).",
+    "audio.now":"In use: ", "audio.follow":"Follow system default", "audio.cur":" (current: {n})",
+    "audio.sysdefault":" (system default)", "audio.none":"none",
+    "udp.title":"How to enable in-game UDP telemetry",
+    "udp.body":"Game <b>Settings → UDP Telemetry</b>:<br>• UDP Telemetry: <code>On</code><br>• UDP IP: <code>127.0.0.1</code>　• UDP Port: <code>20777</code><br>• UDP Format: <code>2026</code> (match your game)<br>• Keep <b>“Your Telemetry” = <code>Restricted</code></b> — changing it may break reception; restart the game.",
+    "panel.telemetry":"Telemetry", "panel.board":"Leaderboard", "panel.radio":"Team radio",
+    "conn.wait":"waiting", "conn.live":"LIVE",
+    "nav.ai":"AI settings", "nav.feat":"Features", "nav.exportTxt":"Export TXT", "nav.exportJson":"Export JSON",
+    "ask.ph":"Ask something… (e.g. what's my lap time)", "ask.send":"Ask", "ask.voicehint":"🎤 Hold to talk · release to send · Esc to cancel", "ask.enter":"Shortcut: Enter to send",
+    "q.lap":"Lap delta", "q.tyre":"Tyres", "q.fuel":"Fuel", "q.pos":"Position", "q.loss":"Time lost",
+    "meta.packets":"rx {a} · dropped {d} · errors {e}",
+    "board.h":"P Driver", "board.h2":"Tyre  Gap", "board.lead":"leader",
+    "ui.noanswer":""
+  }
+};
+let LANG = localStorage.getItem('f1tr_lang') || 'zh';
+function t(k, vars){
+  let s = (I18N[LANG] && I18N[LANG][k]) || (I18N.zh[k] !== undefined ? I18N.zh[k] : k);
+  if (vars){ for (const key in vars){ s = s.replace('{'+key+'}', vars[key]); } }
+  return s;
+}
+function pick(o, base){
+  return LANG === 'en' ? (o[base+'_en'] || o[base] || '') : (o[base] || o[base+'_en'] || '');
+}
+function applyI18n(){
+  document.documentElement.lang = (LANG === 'en' ? 'en' : 'zh');
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.getAttribute('data-i18n')); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.getAttribute('data-i18n-ph')); });
+  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.getAttribute('data-i18n-html')); });
+  const z=document.getElementById('langZh'), e=document.getElementById('langEn');
+  if (z) z.style.color = LANG==='zh' ? 'var(--accent)' : 'var(--dim)';
+  if (e) e.style.color = LANG==='en' ? 'var(--accent)' : 'var(--dim)';
+  featSchema = null; const ff=document.getElementById('featForm'); if (ff) ff.innerHTML='';
+  loadAudio();
+  loadFeatures();
+}
+function setLang(l){ LANG = l; localStorage.setItem('f1tr_lang', l); applyI18n(); }
 const FACTS_CN = {
   lap:"圈数", position:"位置", current_lap_time:"当前圈", last_lap_time:"上一圈",
   best_lap_time:"最快圈", delta_to_best:"vs最快圈", sector1:"S1", sector2:"S2", sector3:"S3",
   gap_to_front:"距前车", gap_to_leader:"距领先", speed_kph:"速度(kph)", gear:"档位",
   tyre_compound:"轮胎", tyre_age_laps:"胎龄(圈)", fuel_kg:"油量(kg)", fuel_laps_left:"油量圈数",
   fuel_rate_kg_per_lap:"油耗(kg/圈)", fuel_surplus_laps:"剩余圈数", predicted_final_fuel_kg:"预测完赛油",
-  ers_energy_j:"ERS", drs_allowed:"DRS", active_aero:"空动", overtake_available:"超车可用", overtake_active:"超车激活"
+  ers_energy_j:"ERS", drs_allowed:"DRS", active_aero:"空动", overtake_available:"超车可用", overtake_active:"超车激活",
+  total_laps:"总圈数", laps_remaining:"剩余圈数", session_time_left_s:"剩余时间(s)", air_temp_c:"气温",
+  track_temp_c:"赛道温度", rain_percentage:"降雨概率(%)", pit_stops:"进站次数", lockup:"抱死"
 };
+const FACTS_EN = {
+  lap:"Lap", position:"Pos", current_lap_time:"Current", last_lap_time:"Last",
+  best_lap_time:"Best", delta_to_best:"vs best", sector1:"S1", sector2:"S2", sector3:"S3",
+  gap_to_front:"Gap ahead", gap_to_leader:"Gap to leader", speed_kph:"Speed(kph)", gear:"Gear",
+  tyre_compound:"Tyre", tyre_age_laps:"Tyre age(laps)", fuel_kg:"Fuel(kg)", fuel_laps_left:"Fuel laps",
+  fuel_rate_kg_per_lap:"Fuel/lap", fuel_surplus_laps:"Surplus laps", predicted_final_fuel_kg:"Pred. finish fuel",
+  ers_energy_j:"ERS", drs_allowed:"DRS", active_aero:"Aero", overtake_available:"Overtake avail", overtake_active:"Overtake active",
+  total_laps:"Total laps", laps_remaining:"Laps left", session_time_left_s:"Time left(s)", air_temp_c:"Air temp",
+  track_temp_c:"Track temp", rain_percentage:"Rain(%)", pit_stops:"Pit stops", lockup:"Lockup"
+};
+function factLabel(k){ const M = (LANG==='en'?FACTS_EN:FACTS_CN); return M[k] || k; }
 function esc(s){ return (s+"").replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
 function renderFacts(facts){
   const el = document.getElementById("facts");
   let html = "";
-  for (const [k,label] of Object.entries(FACTS_CN)){
-    if (!(k in facts)) continue;
+  for (const k in facts){
     let v = facts[k];
     if (v === null || v === "" || v === "-") continue;
     if (k === "tyre_temp_c" || Array.isArray(v)) continue;
-    html += `<div class="row"><span class="k">${label}</span><span class="v">${esc(v)}</span></div>`;
+    if (!(k in FACTS_CN) && !(k in FACTS_EN)) continue;   // show only known keys
+    html += `<div class="row"><span class="k">${factLabel(k)}</span><span class="v">${esc(v)}</span></div>`;
   }
-  if (facts.tyre_temp_c) html += `<div class="row"><span class="k">胎温(FL FR RL RR)</span><span class="v">${esc(facts.tyre_temp_c.join(" / "))}</span></div>`;
-  el.innerHTML = html || "<div class='k'>暂无数据</div>";
+  if (facts.tyre_temp_c) html += `<div class="row"><span class="k">${LANG==='en'?'Tyre °C (FL FR RL RR)':'胎温(FL FR RL RR)'}</span><span class="v">${esc(facts.tyre_temp_c.join(" / "))}</span></div>`;
+  el.innerHTML = html || `<div class='k'>${LANG==='en'?'no data':'暂无数据'}</div>`;
 }
 function renderNotes(notes){
   const el = document.getElementById("notes");
@@ -272,10 +376,10 @@ function renderNotes(notes){
 function renderBoard(rows){
   const el = document.getElementById("board");
   if (!rows || !rows.length){ el.innerHTML = "<span class='k'>-</span>"; return; }
-  let html = `<div class="row"><span class="k">P 车手</span><span class="k">轮胎  落后</span></div>`;
+  let html = `<div class="row"><span class="k">${t('board.h')}</span><span class="k">${t('board.h2')}</span></div>`;
   for (const r of rows){
     const me = r.is_player ? "style='color:var(--accent);font-weight:700'" : "";
-    const gap = r.position === 1 ? "领先" : "+" + ((r.gap_to_leader_ms||0)/1000).toFixed(1) + "s";
+    const gap = r.position === 1 ? t('board.lead') : "+" + ((r.gap_to_leader_ms||0)/1000).toFixed(1) + "s";
     const tyre = r.tyre || "-";
     html += `<div class="row" ${me}><span>${r.position}. ${esc(r.driver||"-")}</span><span class="v">${esc(tyre)}  ${gap}</span></div>`;
   }
@@ -326,18 +430,18 @@ async function saveSetup(){
   const model = document.getElementById("setModel").value.trim();
   const key = document.getElementById("setKey").value.trim();
   const msg = document.getElementById("setMsg");
-  msg.className = "meta"; msg.textContent = "保存中…";
+  msg.className = "meta"; msg.textContent = t("ai.saving");
   try {
     const body = {};
     if (base) body.base_url = base;
     if (model) body.model = model;
     if (key) body.api_key = key;
     await fetch("/api/llm", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
-    msg.textContent = "已保存，测试连接中…";
+    msg.textContent = t("ai.testing");
     const r = await fetch("/api/models");
-    if (r.ok){ msg.className = "meta ok"; msg.textContent = "✓ 连接成功，AI 已就绪"; document.getElementById("setKey").value = ""; }
-    else { const e = await r.json(); msg.className = "meta bad"; msg.textContent = "连接失败：" + (e.error||r.status) + "（本地问答仍可用）"; }
-  } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
+    if (r.ok){ msg.className = "meta ok"; msg.textContent = t("ai.ok"); document.getElementById("setKey").value = ""; }
+    else { const e = await r.json(); msg.className = "meta bad"; msg.textContent = t("ai.fail", {e:(e.error||r.status)}); }
+  } catch(e){ msg.className = "meta bad"; msg.textContent = t("ai.fail", {e:e}); }
 }
 document.getElementById("setSave").onclick = saveSetup;
 function showPanel(id){
@@ -348,6 +452,8 @@ document.getElementById("setupClose").onclick = (ev) => { ev.preventDefault(); s
 document.getElementById("featClose").onclick = (ev) => { ev.preventDefault(); showPanel(""); };
 document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); setupDismissed = true; showPanel("setup"); window.scrollTo(0,0); };
 document.getElementById("openFeat").onclick = (ev) => { ev.preventDefault(); showPanel("featBox"); loadFeatures(); loadAudio(); window.scrollTo(0,0); };
+document.getElementById("langZh").onclick = (ev) => { ev.preventDefault(); setLang('zh'); };
+document.getElementById("langEn").onclick = (ev) => { ev.preventDefault(); setLang('en'); };
 // ---- feature toggles (schema-driven) ----
 let featSchema = null;
 async function loadFeatures(){
@@ -357,30 +463,35 @@ async function loadFeatures(){
     featSchema = d.settings || [];
     const groups = {};
     for (const s of featSchema){ (groups[s.group] = groups[s.group] || []).push(s); }
-    const gname = {ai:"AI",audio:"音频设备",voice:"语音/按键",radio:"主动播报",model:"推演/轮胎",debrief:"赛后复盘",general:"通用"};
+    const gnameZh = {ai:"AI / 模型",audio:"音频设备",voice:"语音 / 按键",radio:"主动播报",model:"推演 / 轮胎",debrief:"赛后复盘",general:"通用"};
+    const gnameEn = {ai:"AI / Model",audio:"Audio devices",voice:"Voice / PTT",radio:"Proactive radio",model:"Race model / Tyres",debrief:"Debrief",general:"General"};
     let html = "";
     for (const g of Object.keys(groups)){
+      const gname = (LANG==='en' ? gnameEn : gnameZh);
       html += `<div style="color:var(--accent);font-size:12px;margin:8px 0 2px;">${gname[g]||g}</div>`;
       for (const s of groups[g]){
         const id = "f_" + s.key;
         let input;
         if (s.type === "bool"){
-          input = `<select id="${id}"><option value="1">开</option><option value="0">关</option></select>`;
+          input = `<select id="${id}"><option value="1">${t('common.on')}</option><option value="0">${t('common.off')}</option></select>`;
         } else if (s.type === "enum"){
           input = `<select id="${id}">` + s.choices.map(c=>`<option>${c}</option>`).join("") + `</select>`;
         } else if (s.type === "int" || s.type === "float"){
           input = `<input id="${id}" type="number" step="${s.type==="float"?"0.1":"1"}" value="${s.value}">`;
         } else if (s.secret){
-          input = `<input id="${id}" type="password" placeholder="（已隐藏，留空不改）" style="width:100%">`;
+          input = `<input id="${id}" type="password" placeholder="${LANG==='en'?'(hidden; leave blank)':'（已隐藏，留空不改）'}" style="width:100%">`;
         } else {
           input = `<input id="${id}" value="${s.value}">`;
         }
-        html += `<div class="row2" style="align-items:center;margin:3px 0;">`
-              + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${s.label||s.key}</label>`
+        const help = pick(s, "help");
+        html += `<div class="row2" style="align-items:flex-start;margin:4px 0;">`
+              + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${pick(s,"label")||s.key}`
+              + (help?`<div style="color:#7c8794;font-size:11px;line-height:1.4;margin-top:2px;">${esc(help)}</div>`:"")
+              + `</label>`
               + `<span style="flex:1">${input}</span></div>`;
       }
     }
-    document.getElementById("featForm").innerHTML = html || "<span class='meta'>无可调项</span>";
+    document.getElementById("featForm").innerHTML = html || `<span class='meta'>${LANG==='en'?'nothing to set':'无可调项'}</span>`;
     for (const s of featSchema){
       const el = document.getElementById("f_"+s.key); if (!el) continue;
       if (s.type === "bool"){
@@ -393,7 +504,7 @@ async function loadFeatures(){
 async function saveFeatures(){
   const msg = document.getElementById("featMsg");
   if (!featSchema){ return; }
-  msg.className = "meta"; msg.textContent = "保存中…";
+  msg.className = "meta"; msg.textContent = t("feat.saving");
   const updates = {};
   for (const s of featSchema){
     const el = document.getElementById("f_"+s.key); if (!el) continue;
@@ -404,9 +515,9 @@ async function saveFeatures(){
     const r = await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(updates)});
     const d = await r.json();
     const errs = Object.keys(d.errors||{});
-    if (errs.length){ msg.className = "meta bad"; msg.textContent = "部分失败：" + JSON.stringify(d.errors); }
-    else { msg.className = "meta ok"; msg.textContent = "✓ 已保存并生效"; }
-  } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
+    if (errs.length){ msg.className = "meta bad"; msg.textContent = t("feat.partial") + JSON.stringify(d.errors); }
+    else { msg.className = "meta ok"; msg.textContent = t("feat.saved"); }
+  } catch(e){ msg.className = "meta bad"; msg.textContent = t("feat.partial") + e; }
 }
 document.getElementById("featSave").onclick = saveFeatures;
 // ---- audio devices: follow-system by default, pin optional ----
@@ -417,12 +528,12 @@ async function loadAudio(){
       sel.innerHTML = "";
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = "跟随系统当前设备" + (active && active.name ? "（当前: " + active.name + "）" : "");
+      o.textContent = t("audio.follow") + (active && active.name ? t("audio.cur", {n:active.name}) : "");
       sel.appendChild(o);
       for (const dev of (list||[])){
         const op = document.createElement("option");
         op.value = dev.name;
-        op.textContent = dev.name + (dev.default ? "（系统默认）" : "");
+        op.textContent = dev.name + (dev.default ? t("audio.sysdefault") : "");
         if (cur && dev.name === cur) op.selected = true;
         sel.appendChild(op);
       }
@@ -431,7 +542,7 @@ async function loadAudio(){
     fill(document.getElementById("setSpk"), d.output, (d.current||{}).output, (d.active||{}).output);
     const a = d.active || {};
     document.getElementById("audNow").textContent =
-      "🎤 " + ((a.input && a.input.name) || "无") + " / 🔊 " + ((a.output && a.output.name) || "无");
+      "🎤 " + ((a.input && a.input.name) || t("audio.none")) + " / 🔊 " + ((a.output && a.output.name) || t("audio.none"));
   } catch(e){}
 }
 ["setMic","setSpk"].forEach(id => {
@@ -445,6 +556,7 @@ async function loadAudio(){
   };
 });
 document.getElementById("openFeat").addEventListener("click", loadAudio);
+document.getElementById("audRefresh").onclick = loadAudio;
 loadAudio();
 async function poll(){
   try {
@@ -458,13 +570,13 @@ async function poll(){
   const conn = document.getElementById("conn");
   const live = d.stats.accepted > 0 && d.summary.facts.lap;
   conn.className = "badge " + (live ? "live" : "wait");
-  conn.textContent = live ? "比赛中" : "等待数据";
+  conn.textContent = live ? t("conn.live") : t("conn.wait");
   const v = d.voice || {};
   window.voiceOn = !!v.stt;
   document.getElementById("mic").style.display = window.voiceOn ? "" : "none";
   document.getElementById("voicehint").style.display = window.voiceOn ? "" : "none";
   document.getElementById("meta").textContent =
-      `已收 ${d.stats.accepted} 包 · 丢 ${d.stats.dropped_gate} · 错误 ${JSON.stringify(d.packet_errors||{})}`;
+      t("meta.packets", {a:d.stats.accepted, d:d.stats.dropped_gate, e:JSON.stringify(d.packet_errors||{})});
   } catch(e){}
 }
 async function ask(){
@@ -559,11 +671,12 @@ async function checkUpdate(){
     const d = await r.json();
     if (d.update_available){
       document.getElementById("newver").textContent = d.latest;
-      document.getElementById("curver").textContent = d.current;
+      document.getElementById("updCur").textContent = t("update.cur", {v:d.current});
       document.getElementById("update").style.display = "block";
     }
   } catch(e){}
 }
+applyI18n();
 setInterval(poll, 1000); poll();
 setInterval(refreshSetup, 5000); refreshSetup();
 checkUpdate();

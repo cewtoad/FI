@@ -36,7 +36,8 @@ def _settings_payload() -> List[Dict[str, Any]]:
         out.append({
             "key": s.key, "type": s.type, "default": s.default,
             "value": value, "group": s.group, "label": s.label,
-            "help": s.help, "choices": list(s.choices),
+            "help": s.help, "label_en": s.label_en, "help_en": s.help_en,
+            "choices": list(s.choices),
             "min": s.min_value, "max": s.max_value,
             "restart_required": s.restart_required, "secret": s.secret,
         })
@@ -68,51 +69,75 @@ def apply_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
             "persist_error": cfg.last_persist_error}
 
 
+def _groups_payload() -> Dict[str, Dict[str, str]]:
+    return {k: {"zh": v[0], "en": v[1]}
+            for k, v in config_schema.GROUP_LABELS.items()}
+
+
 def _page() -> str:
     return """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>F1 Race Engineer 设置</title><style>
-body{font-family:system-ui,Segoe UI,sans-serif;max-width:820px;margin:20px auto;padding:0 16px}
-h2{border-bottom:1px solid #ddd;padding-top:12px}
-.row{display:flex;gap:10px;align-items:center;margin:6px 0}
-label{flex:0 0 260px;font-size:14px}
-input,select{flex:1;padding:4px 6px}
-.hint{color:#888;font-size:12px}
+body{font-family:system-ui,Segoe UI,sans-serif;max-width:860px;margin:20px auto;padding:0 16px}
+h2{border-bottom:1px solid #ddd;padding-top:14px}
+.row{display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+label{flex:0 0 280px;font-size:14px}
+.hint{color:#888;font-size:12px;margin-top:2px}
+input,select{flex:1;padding:5px 8px}
 button{padding:6px 14px;margin-top:12px}
 .msg{margin-left:10px;color:#1a7f37}
 .err{color:#c00}
+.lang{float:right;font-size:13px}
+.lang a{color:#06c;text-decoration:none;margin-left:8px}
 </style></head><body>
-<h1>F1 Race Engineer 设置</h1>
-<p class="hint">保存后写入 .env；运行中的进程会自动热加载。</p>
+<h1>F1 Race Engineer 设置 <span class="lang">
+  <a href="#" id="zh">中文</a><a href="#" id="en">English</a></span></h1>
+<p class="hint" id="tip">保存后写入 .env；运行中的进程会自动热加载。</p>
 <div id="form"></div>
-<button onclick="save()">保存</button><span id="msg" class="msg"></span>
+<button id="saveBtn" onclick="save()">保存</button><span id="msg" class="msg"></span>
 <script>
-let schema=[];
+let schema=[], groups={};
+let LANG = localStorage.getItem('f1tr_lang') || 'zh';
+const T = {
+  zh:{tip:'保存后写入 .env；运行中的进程会自动热加载。', save:'保存', saved:'已保存',
+      partial:'部分失败: ', restart:' · 需重启', on:'开', off:'关'},
+  en:{tip:'Saved to .env; the running app hot-reloads it.', save:'Save', saved:'Saved',
+      partial:'Some failed: ', restart:' · restart', on:'On', off:'Off'}
+};
+function t(k){ return (T[LANG]||T.zh)[k]; }
+function pick(obj, base){ return LANG==='en' ? (obj[base+'_en']||obj[base]) : (obj[base]||obj[base+'_en']); }
 async function load(){
   const r=await fetch('/api/schema'); const d=await r.json();
-  schema=d.settings; const groups={};
-  for(const s of schema){ (groups[s.group]=groups[s.group]||[]).push(s); }
+  schema=d.settings; groups=d.groups||{};
+  const byGroup={};
+  for(const s of schema){ (byGroup[s.group]=byGroup[s.group]||[]).push(s); }
   let html='';
-  for(const g of Object.keys(groups)){
-    html+=`<h2>${g}</h2>`;
-    for(const s of groups[g]){
-      const v=s.value==null?'':s.value;
+  for(const g of Object.keys(byGroup)){
+    const gl = groups[g] ? groups[g][LANG] : g;
+    html+=`<h2>${gl}</h2>`;
+    for(const s of byGroup[g]){
       let input;
       if(s.type==='bool'){
-        input=`<select id="f_${s.key}"><option value="1">开</option><option value="0">关</option></select>`;
+        input=`<select id="f_${s.key}"><option value="1">${t('on')}</option><option value="0">${t('off')}</option></select>`;
       }else if(s.type==='enum'){
         input=`<select id="f_${s.key}">`+s.choices.map(c=>`<option>${c}</option>`).join('')+`</select>`;
       }else{
-        input=`<input id="f_${s.key}" value="${v}">`;
+        input=`<input id="f_${s.key}" value="${s.value==null?'':s.value}">`;
       }
-      html+=`<div class="row"><label>${s.label||s.key}<div class="hint">${s.key}${s.restart_required?' · 需重启':''}</div></label>${input}</div>`;
+      const help = pick(s,'help');
+      html+=`<div class="row"><label>${pick(s,'label')||s.key}`
+          +`<div class="hint">${s.key}${s.restart_required?t('restart'):''}`
+          +(help?`<br>${help}`:'')+`</div></label>${input}</div>`;
     }
   }
   document.getElementById('form').innerHTML=html;
   for(const s of schema){
     const el=document.getElementById('f_'+s.key); if(!el) continue;
-    if(s.type==='bool') el.value=(String(s.value)==='1'||String(s.value).toLowerCase()==='true'||String(s.value).toLowerCase()==='on')?'1':'0';
+    if(s.type==='bool'){ const v=String(s.value).toLowerCase();
+      el.value=(v==='1'||v==='true'||v==='on')?'1':'0'; }
     else el.value=s.value==null?'':s.value;
   }
+  document.getElementById('tip').textContent=t('tip');
+  document.getElementById('saveBtn').textContent=t('save');
 }
 async function save(){
   const updates={};
@@ -120,9 +145,12 @@ async function save(){
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
   const d=await r.json();
   const m=document.getElementById('msg');
-  if(d.errors && Object.keys(d.errors).length){ m.className='msg err'; m.textContent='部分失败: '+JSON.stringify(d.errors); }
-  else { m.className='msg'; m.textContent='已保存'; }
+  if(d.errors && Object.keys(d.errors).length){ m.className='msg err'; m.textContent=t('partial')+JSON.stringify(d.errors); }
+  else { m.className='msg'; m.textContent=t('saved'); }
 }
+function setLang(l){ LANG=l; localStorage.setItem('f1tr_lang', l); load(); }
+document.getElementById('zh').onclick=(e)=>{e.preventDefault();setLang('zh');};
+document.getElementById('en').onclick=(e)=>{e.preventDefault();setLang('en');};
 load();
 </script></body></html>"""
 
@@ -154,6 +182,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, _page().encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/schema":
             self._json(200, {"settings": _settings_payload(),
+                             "groups": _groups_payload(),
                              "port": get_config().get_int("CONFIG_UI_PORT", DEFAULT_PORT)})
         elif path == "/api/voices":
             self._json(200, {"voices": _voices()})
