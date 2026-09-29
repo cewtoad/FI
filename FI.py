@@ -135,6 +135,7 @@ def _run_web(port: int, web_port: int, open_browser: bool,
     from webui import serve
     if not _require_port_free(port, force):
         raise SystemExit(2)
+    _writable_check()
     if open_browser:
         _open_browser_later(f"http://127.0.0.1:{web_port}")
     serve(port=port, web_port=web_port)
@@ -165,6 +166,7 @@ def _run_voice(port: int, argv: list, force: bool = False) -> None:
     import voice_main
     if not _require_port_free(port, force):
         raise SystemExit(2)
+    _writable_check()
     if not _voice_deps_present():
         print("⚠ 未检测到本地语音依赖 (faster-whisper / sounddevice)。")
         print("   本程序仍会启动，但语音识别需改用云端：在 .env 设")
