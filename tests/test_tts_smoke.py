@@ -1,8 +1,7 @@
 """Quick TTS smoke test: speak a Chinese sentence on the configured output.
 
 This is an audio smoke test, not an assertion test - it makes noise. It is
-skipped unless RUN_NETWORK_TESTS=1 (grouped with the other loopback/audio
-tests that need a real machine).
+skipped unless RUN_NETWORK_TESTS=1 (it needs a real audio device).
 """
 
 from __future__ import annotations

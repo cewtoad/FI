@@ -33,7 +33,8 @@ echo   [4] Audio devices (mic / speaker)
 echo   [5] Play test voice
 echo   [6] Recent session records
 echo.
-echo   [7] Run unit tests (pytest)
+echo   [7] Run unit tests (pytest, offline)
+echo   [8] Run ALL tests (incl. network/audio)
 echo   [q] Quit
 echo.
 set /p "c=Select: "
@@ -46,6 +47,7 @@ if /i "%c%"=="4" goto dev
 if /i "%c%"=="5" goto speak
 if /i "%c%"=="6" goto sessions
 if /i "%c%"=="7" goto pytest
+if /i "%c%"=="8" goto pytestall
 if /i "%c%"=="q" goto end
 goto menu
 
@@ -119,9 +121,20 @@ goto menu
 
 :pytest
 cls
-echo   Running unit tests...
+echo   Running unit tests (offline)...
 echo.
 %PY% -m pytest -q
+echo.
+pause
+goto menu
+
+:pytestall
+cls
+echo   Running ALL tests (loopback UDP + audio)...
+echo.
+set "RUN_NETWORK_TESTS=1"
+%PY% -m pytest -q
+set "RUN_NETWORK_TESTS="
 echo.
 pause
 goto menu

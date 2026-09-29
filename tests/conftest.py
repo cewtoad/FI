@@ -4,8 +4,9 @@ The tests all live under ``tests/`` but import the project modules that live
 in the repository root. Rather than turning the project into an installable
 package, we simply put the repo root on ``sys.path`` before collection.
 
-Also registers the ``network`` marker so tests that need loopback UDP / audio
-can be skipped by default (``RUN_NETWORK_TESTS=1`` opts in).
+Pure loopback UDP tests (udp / parse_guard / full_flow) run by default — they
+need no audio or hardware and are CI-safe. Only the ``network`` marker (audio
+tests such as the TTS smoke test) is skipped unless RUN_NETWORK_TESTS=1.
 """
 
 from __future__ import annotations
@@ -21,5 +22,5 @@ if str(ROOT) not in sys.path:
 def pytest_configure(config) -> None:
     config.addinivalue_line(
         "markers",
-        "network: needs loopback UDP / audio; set RUN_NETWORK_TESTS=1",
+        "network: needs a real audio device; set RUN_NETWORK_TESTS=1",
     )
