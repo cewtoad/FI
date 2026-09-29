@@ -1,8 +1,8 @@
 # F1 Race Engineer
 
-> 一个安静运行在后台的 **AI 赛车工程师**：读取 F1 游戏广播的遥测数据，把它压缩成结构化的信息，然后通过**语音或文字**回答车手关于当前比赛状况的问题。
+> 一个安静运行在后台的 **AI 赛车工程师**：读取 F1 游戏广播的遥测数据，把它压缩成结构化的信息，通过**语音或文字**回答车手的问题，并在**关键时刻主动呼叫**（安全车 / 进站窗口 / 轮胎 / 降雨 …）。
 
-**[ 读遥测 → 结构化总结 → AI 问答 → 语音播报 ]**
+**[ 读遥测 → 本地推演 → 结构化总结 → AI 问答 + 主动播报 ]**
 
 只给情报和建议，**不碰车辆操控**。
 
@@ -14,16 +14,19 @@
 - 📊 **全场位置表** — 位置 / 车手 / 圈数 / 轮胎 / 胎龄 / 差距
 - ⏱ **圈速分析** — 圈速历史、分段计时、vs 最快圈 delta、无效圈过滤
 - ⛽ **油耗策略** — 消耗率、剩余圈数、完赛油量预测
-- 🌡 **轮胎 + 损伤** — 胎温/胎压/磨损、前后翼/底板/引擎车损、进站状态
+- 🌡 **轮胎 + 损伤** — 胎温（内温中位数，抗重刹尖峰）/胎压/磨损、车损、进站状态
 - ⚔ **战况感知** — 位置变化事件，由游戏官方 OVTK 超车事件驱动
+- 📡 **主动播报**（v2）— 本地规则引擎，**不调用 LLM**：安全车/红旗/引擎故障即时播；进站窗口/油量/轮胎/降雨在**直道**播；只报窗口和后果，**不下指令**
+- 🧮 **推演层**（v2）— Stint 分段、磨损速率、配速衰退、与前/后车差距趋势（追近速率、预计几圈进入 1 秒）、进站窗口状态机、降雨 ETA
 - 🎙 **语音问答** — 按【小键盘 +】说话 → 本地语音识别 → AI 回答 → 语音播报（可完全离线）
 - 🎧 **观赛模式** — 焦点自动跟随被观看的车辆
-- 📝 **会话录制** — 自动生成 JSON（原始）+ TXT（可读）报告
-- 🖥 **双界面** — 网页面板 + 终端面板
+- 📝 **会话录制 + 赛后复盘**（v2）— JSON（原始）+ TXT（可读）；过终点自动生成本地复盘 TXT
+- 🖥 **双界面 + 配置页**（v2）— 网页面板（含实时功能开关） + 终端面板 + 独立配置页（`FI.py --config`）
 - 🔌 **多模型** — 任意 OpenAI 兼容端点（DeepSeek/OpenAI/本地 Ollama…），运行时可切换 + 故障回退
-- ⚡ **本地快答** — "我P几/还剩几圈/油够不够"等问题不经过 AI，直接由遥测回答（零延迟、零成本）
+- ⚡ **本地快答** — "我P几/还剩几圈/油够不够/轮胎还能跑几圈/进站窗口"等问题不经过 AI，直接由遥测回答（零延迟、零成本）
 - 🎚 **智能档位** — fast / standard / deep 三档，控制回答长度与深度
-- 🔊 **音频设备热切换** — 网页面板选麦克风/耳机，拔插后自动重连
+- 🔊 **音频设备热切换** — 网页面板选麦克风/耳机，拔插后自动重连；本地播报 SAPI（中文音色）/ 离线 Piper
+- 💾 **原始包录制/回放**（v2）— `tools/udp_record.py` / `tools/replay.py`（`.f1rec`），离线调参复现
 
 ---
 
@@ -33,10 +36,10 @@
 
 | | **轻量核心包** `core` | **全量语音包** `full` |
 |---|---|---|
-| 体积 | 约 40 MB | 约 950 MB |
-| 用法 | 解压 → 双击 `F1Engineer.exe` | 解压 → 双击 `start.bat`（或 `启动.bat`） |
+| 体积 | 约 40 MB | 约 1.2 GB |
+| 用法 | 解压 → 双击 `F1Engineer.exe`（或 `网页模式.bat` / `语音模式.bat`） | 解压 → 双击 `start.bat`（或 `网页模式.bat` / `语音模式.bat`） |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
-| 语音播报 | ✅ 已含 sounddevice/numpy，SAPI/Piper 可用 | ✅ 本地 whisper + SAPI/Piper |
+| 语音播报 | ✅ 已含 sounddevice/numpy，SAPI（中文音色）可用 | ✅ SAPI + 离线 Piper |
 | 语音识别 | 云端 STT（填 key） | **本地 whisper，完全离线** |
 | 适合 | 大多数人、首次尝试 | 想离线 / 隐私 / 不想买 STT 额度 |
 
@@ -340,41 +343,75 @@ flowchart TD
 
 ```
 F1_TR/
-├── FI.py               一键启动（打包入口）：启动二选一（网页 / 语音）
+├── FI.py               一键启动（打包入口）：网页 / 语音 / 设置 / 自检，含端口防呆
 ├── run.py              命令行入口（--web 网页 / 终端面板）
-├── paths.py            路径锚点 app_root()（源码 / PyInstaller / 绿色包通用）
-├── app.py              组合根：统一装配 state/receiver/engineer/recorder
-├── voice_main.py       语音入口（遥测 + 语音问答，单进程）
-├── receiver.py         单进程 UDP 收包 + 解析调度
-├── state.py            遥测状态聚合（快照/位置表/事件/趋势）
-├── summariser.py       总结层：把状态压成 facts + notes
-├── config.py           配置中心（.env + 运行时可改，带锁）
+├── paths.py            路径锚点 app_root() / resource_root()（源码 / PyInstaller / 绿色包通用）
+├── app.py              组合根：装配 state/receiver/engineer/recorder + ticker/race_model/radio/speech
+├── contracts.py        数据契约（Alert / Utterance / Stint / RaceModelState / VoicePack …）
+├── config_schema.py    配置项单一真源（类型/范围/默认/分组）
+├── config.py           配置中心（.env + 运行时可改，原子写 / 热加载 / 校验）
+├── config_ui.py        独立配置页进程（`FI.py --config`，端口 8766）
+├── ticker.py           2Hz 分发线程（推演 + 播报 + 热加载 + 复盘触发）
+├── race_model.py       推演层：Stint / 配速衰退 / GapTrend / PitWindow / 天气
+├── radio_fx.py         无线电提示音 + 轻滤波（numpy）
+├── radio_rules.py      主动播报规则表（按赛段）
+├── radio_templates.py  主动播报中文模板（禁进站祈使句）
+├── radio_director.py   规则引擎 + 时机闸门 + 去重冷却（无 LLM）
+├── speech.py           唯一语音出口：SpeechArbiter + 非阻塞 AudioPlayer
+├── voices.py           语音包 + TTS provider 注册表（SAPI / Piper）
+├── names.py            车手名渲染（中文 / 英文 / 车号）
+├── input_sources.py    输入源抽象（键盘 / HID 手柄）
+├── ptt_controller.py   PTT 状态机（hold / toggle）
+├── debrief.py          赛后复盘（本地 TXT，无 LLM）
+├── voice_main.py       语音入口（走 build_app，含 PTT 与主动播报）
+├── receiver.py         单进程 UDP 收包 + 解析调度（含 raw_sink 录制钩子）
+├── state.py            遥测状态聚合（冻结快照 / 位置表 / 事件时间轴 / 每圈快照 / flashback 回滚）
+├── summariser.py       总结层：facts（含命名空间）+ notes
 ├── llm_client.py       OpenAI 兼容客户端 + make_llm（多端点 / 回退）
-├── ai_client.py        兼容层（`DeepSeekClient` 等旧名字）
 ├── profiles.py         AI 档位（fast/standard/deep）+ 本地快答路由
 ├── audio.py            音频设备解析（列出 / 模糊匹配 / 热切换）
-├── prompts.py          系统提示词 + 快照文本构造
+├── prompts.py          系统提示词 + 快照文本构造（按意图选命名空间）
 ├── engineer.py         问答引擎
-├── webui.py            网页 UI
+├── webui.py            网页 UI（含功能开关面板 + 告警条）
 ├── console_ui.py       终端 UI
 ├── recorder.py         会话录制
 ├── report_txt.py       TXT 报告生成
+├── stt_client.py       语音识别客户端（云端 / 本地 whisper）
+├── tts_client.py       TTS 合成（SAPI / Piper）
 ├── voice_trigger.py    Raw Input 按键触发（不注入/不挂钩）
-├── voice_stt.py        本地 faster-whisper 语音识别
-├── voice_tts.py        Windows SAPI 语音合成 + 播放
-├── download_stt_model.py  下载语音模型到项目内
+├── voice_stt.py        本地 faster-whisper 识别 + 录音
+├── voice_tts.py        TTS 播放 shim（委托 speech.AudioPlayer）
+├── build_manifest.py   打包清单单一真源（模块 / 资源 / hidden-import）
 ├── build_release.ps1   构建两个发布包（轻量 exe + 全量语音包）
-├── version_info.txt    exe 版本元数据
-├── RELEASE_SIGNING.md  代码签名申请指引
-├── 启动.bat            一键启动（菜单：网页 / 语音，自动选 embedded Python）
-├── lib/                核心库
+├── 整体测试.bat        自检 + 运行测试（[7] 离线 / [8] 含网络音频）
+├── 网页模式.bat / 语音模式.bat / start.bat / voice.bat   一键启动
+├── data/               只读资源（driver_names.json 等）
+├── tools/              开发工具（udp_record / replay / make_zip / probe_dualsense…）
+├── tests/              pytest 测试套件（tests/conftest.py 注入路径）
+├── sandbox/            Windows Sandbox 干净机器验收器（make_wsb.py + .wsb）
+├── lib/                核心库（第三方解析层，只读）
 │   ├── f1_types/           17 种 F1 packet 解析（2023–2026）
 │   ├── socket_receiver/    UDP 传输
 │   ├── telemetry_manager/  解析工厂 + 帧门
 │   ├── delta/              圈速 delta
 │   └── fuel_rate_recommender.py / rolling_history.py
-└── sessions/           自动生成的会话记录（运行时产生）
+├── stt_lib/            本地语音依赖（faster-whisper / sounddevice / piper，全量包自带）
+├── stt_models/         本地 whisper 模型（全量包自带）
+├── piper_models/       离线 Piper 模型（可选）
+└── sessions/           自动生成的会话记录与复盘（运行时产生）
 ```
+
+---
+
+## 测试
+
+```powershell
+py -3.12 -m pytest -q                        # 离线套件（含 loopback UDP）
+$env:RUN_NETWORK_TESTS=1; py -3.12 -m pytest # 追加需真实音频设备的用例
+```
+
+也可双击 `整体测试.bat`：`[A]` 自检、`[7]` 离线测试、`[8]` 全部测试。
+`FI.py --selftest` 会逐项检查依赖 / 资源 / 端口 / 音频设备 / SAPI 中文音色 / `.env` / LLM。
 
 ---
 

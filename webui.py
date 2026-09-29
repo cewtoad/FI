@@ -37,7 +37,7 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.4.0"
 _RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
 _version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
