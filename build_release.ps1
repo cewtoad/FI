@@ -48,9 +48,9 @@ function Build-Core {
     # T10a/T10b: the whole argument list comes from the shared manifest so this
     # build and release.yml cannot drift (CI once lost --add-data data). Hidden
     # imports, excludes and the data/ resource are all handled there.
-    $args = @()
-    py -3.12 build_manifest.py pyinstaller-args | ForEach-Object { $args += $_ }
-    py -3.12 -m PyInstaller @args --distpath $dist --workpath $work
+    # NOTE: do not name this $args - that is a PowerShell automatic variable.
+    $pyiArgs = @(py -3.12 build_manifest.py pyinstaller-args)
+    py -3.12 -m PyInstaller @pyiArgs --distpath $dist --workpath $work
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败" }
 
     $exeDir = Join-Path $dist "F1Engineer"

@@ -41,9 +41,9 @@ jobs:
         run: |
           # Args come from the shared manifest so the CI build cannot drift
           # from build_release.ps1 (it previously lost --add-data data).
-          $args = @()
-          py -3.12 build_manifest.py pyinstaller-args | ForEach-Object { $args += $_ }
-          py -3.12 -m PyInstaller @args
+          # Do not name this $args - that is a PowerShell automatic variable.
+          $pyiArgs = @(py -3.12 build_manifest.py pyinstaller-args)
+          py -3.12 -m PyInstaller @pyiArgs
       - name: Collect default config
         run: Copy-Item .env.example dist/F1Engineer/.env.example
       - name: Zip core
