@@ -1,0 +1,23 @@
+<Configuration>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>G:\AI WORK\F1_TR\dist</HostFolder>
+      <SandboxFolder>Z:\in</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>G:\AI WORK\F1_TR\sandbox</HostFolder>
+      <SandboxFolder>Z:\tools</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>G:\AI WORK\F1_TR\sandbox_out</HostFolder>
+      <SandboxFolder>Z:\out</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <ClipboardRedirection>true</ClipboardRedirection>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File Z:\tools\in_sandbox_test.ps1</Command>
+  </LogonCommand>
+</Configuration>
