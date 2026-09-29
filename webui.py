@@ -149,8 +149,10 @@ PAGE = r"""<!doctype html>
     <a id="dlLink" href="https://github.com/cewtoad/FI/releases/latest" target="_blank"
        style="color:var(--accent);margin-left:8px;">前往下载 →</a>
   </div>
-  <div class="setup" id="setup">
-    <h2>⚙ 首次设置：填入 AI key（不填也能用本地问答）</h2>
+  <div class="setup" id="setup" style="display:none">
+    <h2>⚙ AI 设置（不填也能用本地问答）
+      <a href="#" id="setupClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;">关闭 ✕</a>
+    </h2>
     <div style="font-size:12px;color:var(--dim);margin-bottom:6px;">
       支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。
       名次、圈速、油量、胎温、损伤等高频问题**无需 key** 即可回答。
@@ -162,9 +164,13 @@ PAGE = r"""<!doctype html>
     <input type="password" id="setKey" placeholder="API Key（sk-...）">
     <div class="row2" style="margin-top:6px;">
       <button id="setSave">保存并测试连接</button>
-      <button id="setClose" style="background:#232a36;color:var(--txt);">稍后</button>
     </div>
     <div class="meta" id="setMsg"></div>
+  </div>
+  <div class="setup" id="featBox" style="display:none">
+    <h2>🎚 功能设置
+      <a href="#" id="featClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;">关闭 ✕</a>
+    </h2>
     <details class="setupbox">
       <summary>🎤🔊 语音设备（默认跟随系统正在使用的设备）</summary>
       <div class="row2" style="margin-top:6px;">
@@ -186,26 +192,24 @@ PAGE = r"""<!doctype html>
         • <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。
       </div>
     </details>
-    <details class="setupbox" id="featBox">
-      <summary>🎚 功能开关（主动播报 / 语音 / 推演 / 复盘 …）</summary>
-      <div style="font-size:12px;color:var(--dim);margin-top:6px;">
-        改这里立即生效并写入 <code>.env</code>（部分项需重启）。
-      </div>
-      <div id="featForm" style="margin-top:8px;"></div>
-      <div class="row2" style="margin-top:6px;">
-        <button id="featSave">保存开关</button>
-        <a href="http://127.0.0.1:8766" target="_blank"
-           style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;">
-           打开完整设置页（语音包 / 按键 / 高级）→</a>
-      </div>
-      <div class="meta" id="featMsg"></div>
-    </details>
+    <div style="font-size:12px;color:var(--dim);margin:10px 0 2px;">主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 <code>.env</code>（部分项需重启）。</div>
+    <div id="featForm" style="margin-top:6px;"></div>
+    <div class="row2" style="margin-top:6px;">
+      <button id="featSave">保存开关</button>
+      <a href="http://127.0.0.1:8766" target="_blank"
+         style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;">
+         打开完整设置页(语音包 / 按键 / 高级) →</a>
+    </div>
+    <div class="meta" id="featMsg"></div>
   </div>
 </div>
 <div class="wrap">
   <div class="panel">
     <h1>遥测面板 <span id="conn" class="badge wait">等待数据</span>
-      <a href="#" id="openSet" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;">设置</a>
+      <span style="float:right;font-size:12px;font-weight:400;">
+        <a href="#" id="openSet" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;">AI 设置</a>
+        <a href="#" id="openFeat" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;">功能设置</a>
+      </span>
     </h1>
     <div id="alertbar" style="display:none"></div>
     <div id="facts"></div>
@@ -300,14 +304,17 @@ function addMsg(who, text){
   log.scrollTop = log.scrollHeight;
 }
 let llmKnown = null;
+let setupDismissed = false;
 async function refreshSetup(){
   try {
     const r = await fetch("/api/llm");
     const d = await r.json();
     const eng = d.engineer || {};
     const noKey = !eng.base_url || !eng.model;
-    document.getElementById("setup").style.display = llmKnown && !noKey ? "none" : "block";
-    if (document.getElementById("setup").style.display === "block" && noKey){
+    // Only do first-run onboarding: show the AI panel once when no key is set.
+    // Never auto-hide it — that used to close the panel the user just opened.
+    if (llmKnown === null && noKey && !setupDismissed){
+      document.getElementById("setup").style.display = "block";
       if (!document.getElementById("setBase").value) document.getElementById("setBase").value = eng.base_url || "https://api.deepseek.com";
       if (!document.getElementById("setModel").value) document.getElementById("setModel").value = eng.model || "deepseek-flash";
     }
@@ -328,13 +335,19 @@ async function saveSetup(){
     await fetch("/api/llm", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
     msg.textContent = "已保存，测试连接中…";
     const r = await fetch("/api/models");
-    if (r.ok){ msg.className = "meta ok"; msg.textContent = "✓ 连接成功，AI 已就绪"; document.getElementById("setKey").value = ""; refreshSetup(); }
+    if (r.ok){ msg.className = "meta ok"; msg.textContent = "✓ 连接成功，AI 已就绪"; document.getElementById("setKey").value = ""; }
     else { const e = await r.json(); msg.className = "meta bad"; msg.textContent = "连接失败：" + (e.error||r.status) + "（本地问答仍可用）"; }
   } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
 }
 document.getElementById("setSave").onclick = saveSetup;
-document.getElementById("setClose").onclick = () => { document.getElementById("setup").style.display = "none"; };
-document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); document.getElementById("setup").style.display = "block"; window.scrollTo(0,0); };
+function showPanel(id){
+  document.getElementById("setup").style.display = (id === "setup") ? "block" : "none";
+  document.getElementById("featBox").style.display = (id === "featBox") ? "block" : "none";
+}
+document.getElementById("setupClose").onclick = (ev) => { ev.preventDefault(); setupDismissed = true; showPanel(""); };
+document.getElementById("featClose").onclick = (ev) => { ev.preventDefault(); showPanel(""); };
+document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); setupDismissed = true; showPanel("setup"); window.scrollTo(0,0); };
+document.getElementById("openFeat").onclick = (ev) => { ev.preventDefault(); showPanel("featBox"); loadFeatures(); loadAudio(); window.scrollTo(0,0); };
 // ---- feature toggles (schema-driven) ----
 let featSchema = null;
 async function loadFeatures(){
@@ -395,7 +408,6 @@ async function saveFeatures(){
     else { msg.className = "meta ok"; msg.textContent = "✓ 已保存并生效"; }
   } catch(e){ msg.className = "meta bad"; msg.textContent = "请求失败：" + e; }
 }
-document.getElementById("featBox").addEventListener("toggle", (ev) => { if (ev.target.open) loadFeatures(); });
 document.getElementById("featSave").onclick = saveFeatures;
 // ---- audio devices: follow-system by default, pin optional ----
 async function loadAudio(){
@@ -432,7 +444,7 @@ async function loadAudio(){
     } catch(e){}
   };
 });
-document.getElementById("openSet").addEventListener("click", loadAudio);
+document.getElementById("openFeat").addEventListener("click", loadAudio);
 loadAudio();
 async function poll(){
   try {

@@ -49,6 +49,16 @@ def test_page_has_feature_toggle_panel():
     assert "8766" in webui.PAGE          # link to the full config page
 
 
+def test_settings_panels_are_separate_and_dont_auto_close():
+    p = webui.PAGE
+    # AI settings and feature settings are two distinct panels / entry points.
+    assert 'id="setup"' in p and 'id="featBox"' in p
+    assert 'id="openSet"' in p and 'id="openFeat"' in p
+    assert "setupClose" in p and "featClose" in p
+    # regression: the panel must not be auto-hidden by the 5s refresh.
+    assert "llmKnown && !noKey" not in p
+
+
 def test_get_settings_lists_toggles():
     httpd, port = _serve()
     try:
