@@ -197,7 +197,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
     if app.mode == "voice":
         try:
             from speech import AudioPlayer, SpeechArbiter
-            from voices import make_tts as make_voice_tts
+            from voices import make_configured_tts as make_voice_tts
 
             engine = tts_engine or make_voice_tts()
             player = AudioPlayer(output_device=audio_output, logger=logger)

@@ -37,7 +37,7 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.4.3"
 _RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
 _version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
@@ -140,9 +140,16 @@ PAGE = r"""<!doctype html>
   details.setupbox { margin-top:10px; }
   details.setupbox summary { cursor:pointer; color:var(--accent); font-size:12px; }
   @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
+  /* hover tooltip: follows the mouse, disappears on mouse-out */
+  #tip { position:fixed; display:none; pointer-events:none; z-index:9999;
+         max-width:380px; background:#0b1218; border:1px solid var(--line);
+         padding:7px 10px; border-radius:8px; font-size:12px; color:var(--txt);
+         line-height:1.55; box-shadow:0 4px 16px rgba(0,0,0,.5); }
+  [data-help] { cursor:help; }
 </style>
 </head>
 <body>
+<div id="tip"></div>
 <div class="wrap" style="grid-template-columns:1fr;">
   <div class="setup" id="update" style="background:#16293a;border-color:#2b5a7a;display:none;">
     <span style="color:#8ecbff;"><span data-i18n="update.found">发现新版本</span> <b id="newver"></b><span id="updCur"></span></span>
@@ -281,7 +288,9 @@ const I18N = {
     "q.lap":"圈速差", "q.tyre":"轮胎", "q.fuel":"油量", "q.pos":"位置", "q.loss":"损失时间",
     "meta.packets":"已收 {a} 包 · 丢 {d} · 错误 {e}",
     "board.h":"P 车手", "board.h2":"轮胎  落后", "board.lead":"领先",
-    "ui.noanswer":"" 
+    "bind.btn":"⌨ 按键绑定", "bind.wait":"请按一下要绑定的键…（键盘）",
+    "bind.ok":"✓ 已识别：{b}", "bind.none":"没检测到按键（超时）。手柄按键需系统能通过 Raw Input 收到。",
+    "ui.noanswer":""
   },
   en: {
     "update.found":"New version", "update.dl":"Download →", "update.cur":" (current {v})",
@@ -309,6 +318,8 @@ const I18N = {
     "q.lap":"Lap delta", "q.tyre":"Tyres", "q.fuel":"Fuel", "q.pos":"Position", "q.loss":"Time lost",
     "meta.packets":"rx {a} · dropped {d} · errors {e}",
     "board.h":"P Driver", "board.h2":"Tyre  Gap", "board.lead":"leader",
+    "bind.btn":"⌨ Bind key", "bind.wait":"Press the key to bind… (keyboard)",
+    "bind.ok":"✓ Detected: {b}", "bind.none":"No key detected (timeout). Gamepad buttons need to reach Raw Input.",
     "ui.noanswer":""
   }
 };
@@ -356,6 +367,34 @@ const FACTS_EN = {
 };
 function factLabel(k){ const M = (LANG==='en'?FACTS_EN:FACTS_CN); return M[k] || k; }
 function esc(s){ return (s+"").replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
+// ---- hover tooltip: follows the mouse over any [data-help], hides on leave ----
+(function(){
+  const tip = document.getElementById("tip");
+  if (!tip) return;
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest && e.target.closest("[data-help]");
+    if (!el || !el.getAttribute("data-help")) { tip.style.display = "none"; return; }
+    tip.textContent = el.getAttribute("data-help");
+    tip.style.display = "block";
+    move(e);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest && e.target.closest("[data-help]");
+    if (el) tip.style.display = "none";
+  });
+  function move(e){
+    if (tip.style.display !== "block") return;
+    const pad = 14;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    const r = tip.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - pad;
+    if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = Math.max(4, x) + "px";
+    tip.style.top = Math.max(4, y) + "px";
+  }
+  document.addEventListener("mousemove", move);
+  window.addEventListener("scroll", () => { tip.style.display = "none"; }, true);
+})();
 function renderFacts(facts){
   const el = document.getElementById("facts");
   let html = "";
@@ -472,7 +511,9 @@ async function loadFeatures(){
       for (const s of groups[g]){
         const id = "f_" + s.key;
         let input;
-        if (s.type === "bool"){
+        if (s.choices_from === "voices"){
+          input = `<select id="${id}"><option value="">${LANG==='en'?'(auto)':'（自动）'}</option></select>`;
+        } else if (s.type === "bool"){
           input = `<select id="${id}"><option value="1">${t('common.on')}</option><option value="0">${t('common.off')}</option></select>`;
         } else if (s.type === "enum"){
           input = `<select id="${id}">` + s.choices.map(c=>`<option>${c}</option>`).join("") + `</select>`;
@@ -483,23 +524,65 @@ async function loadFeatures(){
         } else {
           input = `<input id="${id}" value="${s.value}">`;
         }
-        const help = pick(s, "help");
-        html += `<div class="row2" style="align-items:flex-start;margin:4px 0;">`
-              + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${pick(s,"label")||s.key}`
-              + (help?`<div style="color:#7c8794;font-size:11px;line-height:1.4;margin-top:2px;">${esc(help)}</div>`:"")
-              + `</label>`
-              + `<span style="flex:1">${input}</span></div>`;
+        const bindBtn = (s.key === "PTT_BINDING")
+          ? `<button type="button" id="bindBtn" style="margin-left:6px;padding:6px 10px;">${t('bind.btn')}</button>` : "";
+        html += `<div class="row2" style="align-items:center;margin:4px 0;">`
+              + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${pick(s,"label")||s.key}</label>`
+              + `<span style="flex:1;display:flex;align-items:center;">${input}${bindBtn}</span></div>`;
       }
     }
     document.getElementById("featForm").innerHTML = html || `<span class='meta'>${LANG==='en'?'nothing to set':'无可调项'}</span>`;
+    // attach help tooltips (on the whole row: hover anywhere to read)
+    const rows = document.getElementById("featForm").children;
     for (const s of featSchema){
       const el = document.getElementById("f_"+s.key); if (!el) continue;
-      if (s.type === "bool"){
+      const help = pick(s, "help");
+      const row = el.closest(".row2");
+      if (row && help){ row.setAttribute("data-help", help); }
+      if (s.choices_from === "voices"){
+        populateVoices(el, s.value);
+      } else if (s.type === "bool"){
         const v = String(s.value).toLowerCase();
         el.value = (v==="1"||v==="true"||v==="on") ? "1" : "0";
-      } else if (!s.secret){ el.value = s.value == null ? "" : s.value; }
+      } else if (s.type !== "secret"){ el.value = s.value == null ? "" : s.value; }
     }
+    const bb = document.getElementById("bindBtn");
+    if (bb) bb.onclick = startBind;
   } catch(e){}
+}
+let voicesCache = null;
+async function populateVoices(sel, cur){
+  try {
+    if (!voicesCache){
+      const r = await fetch("/api/voices"); const d = await r.json();
+      voicesCache = d.voices || [];
+    }
+    for (const v of voicesCache){
+      const o = document.createElement("option");
+      o.value = v.id; o.textContent = v.label || v.id;
+      sel.appendChild(o);
+    }
+    if (cur) sel.value = cur;
+  } catch(e){}
+}
+async function startBind(){
+  const msg = document.getElementById("featMsg");
+  const btn = document.getElementById("bindBtn");
+  if (btn){ btn.disabled = true; btn.textContent = t('bind.wait'); }
+  msg.className = "meta"; msg.textContent = t('bind.wait');
+  try {
+    const r = await fetch("/api/bind", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({timeout_s: 8})});
+    const d = await r.json();
+    if (d.binding){
+      const el = document.getElementById("f_PTT_BINDING");
+      if (el) el.value = d.binding;
+      msg.className = "meta ok"; msg.textContent = t('bind.ok', {b:d.binding});
+    } else {
+      msg.className = "meta bad"; msg.textContent = t('bind.none');
+    }
+  } catch(e){ msg.className = "meta bad"; msg.textContent = t('bind.none'); }
+  if (btn){ btn.disabled = false; btn.textContent = t('bind.btn'); }
 }
 async function saveFeatures(){
   const msg = document.getElementById("featMsg");
@@ -782,6 +865,16 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/settings":
             from config_ui import _settings_payload
             self._send_json(200, {"settings": _settings_payload()})
+        elif self.path == "/api/voices":
+            from voices import list_voices
+            try:
+                vs = [{"id": v.id, "provider": v.provider, "voice": v.voice,
+                       "label": v.label} for v in list_voices()]
+            except Exception as e:  # noqa: BLE001
+                vs = []
+                self._send_json(200, {"voices": [], "error": str(e)})
+                return
+            self._send_json(200, {"voices": vs})
         elif self.path == "/api/export":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             rec = ctx["recorder"]
@@ -827,7 +920,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/api/ask_voice":
             self._ask_voice()
             return
-        if self.path in ("/api/llm", "/api/audio", "/api/settings") and not self._local_only():
+        if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind") and not self._local_only():
             self._send_json(403, {"error": "config changes are local-only"})
             return
         if self.path == "/api/llm":
@@ -841,6 +934,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/settings":
             self._set_settings()
+            return
+        if self.path == "/api/bind":
+            self._bind()
             return
         if self.path != "/api/ask":
             self._send(404, b"not found", "text/plain")
@@ -936,6 +1032,30 @@ class _Handler(BaseHTTPRequestHandler):
             return
         from config_ui import apply_settings
         self._send_json(200, apply_settings(body))
+
+    def _bind(self) -> None:
+        """POST /api/bind - capture the next key press as a PTT binding.
+
+        Body: {"timeout_s": 6}. Blocks until a key is pressed or timeout.
+        """
+        body = self._read_json()
+        if body is None:
+            return
+        try:
+            timeout = float(body.get("timeout_s", 6))
+        except (TypeError, ValueError):
+            timeout = 6.0
+        timeout = max(1.0, min(30.0, timeout))
+        from input_sources import capture_keyboard_binding
+        try:
+            got = capture_keyboard_binding(timeout_s=timeout)
+        except Exception as e:  # noqa: BLE001
+            self._send_json(200, {"binding": "", "error": str(e)})
+            return
+        if not got:
+            self._send_json(200, {"binding": "", "error": "nothing detected"})
+            return
+        self._send_json(200, got)
 
     def _ask_voice(self) -> None:
         """POST /api/ask_voice - raw audio body -> {question, answer, audio}."""

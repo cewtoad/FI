@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import sys
 import threading
 from ctypes import wintypes
 from typing import Callable, Optional
@@ -175,4 +176,47 @@ def make_source(binding: str, on_press=None, on_release=None, on_tap=None,
             _log.info("HID binding present but disabled until probe is confirmed")
             return None
         return HidSource(desc, on_press, on_release, on_tap)
+    return None
+
+
+# Mouse buttons are never used for PTT; ignore them while capturing.
+_MOUSE_VKS = {0x01, 0x02, 0x04, 0x05, 0x06}
+
+
+def capture_keyboard_binding(timeout_s: float = 6.0, poll_hz: float = 60.0,
+                             clock=None, sleep=None) -> Optional[dict]:
+    """Wait for the next keyboard key press and return a ``kb:`` binding.
+
+    Polls ``GetAsyncKeyState`` (passive read, no hook) until a key is pressed
+    or the timeout elapses. Mouse buttons are ignored. Returns
+    ``{"binding": "kb:0x6B", "vk": 107}`` or None on timeout. Windows only.
+    """
+    if sys.platform != "win32":
+        return None
+    import time as _time
+
+    import ctypes
+    user32 = ctypes.windll.user32
+    clk = clock or _time.monotonic
+    slp = sleep or _time.sleep
+    period = 1.0 / max(1.0, poll_hz)
+
+    def _down(vk: int) -> bool:
+        return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+    end = clk() + timeout_s
+    # Wait until all keys are released (so the click that started capture, or a
+    # key still held, is not mistaken for the target press).
+    while clk() < end:
+        if not any(_down(vk) for vk in range(1, 255) if vk not in _MOUSE_VKS):
+            break
+        slp(period)
+    # Then wait for the first new press.
+    while clk() < end:
+        for vk in range(1, 255):
+            if vk in _MOUSE_VKS:
+                continue
+            if _down(vk):
+                return {"binding": f"kb:0x{vk:02X}", "vk": vk}
+        slp(period)
     return None

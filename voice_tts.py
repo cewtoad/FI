@@ -27,7 +27,7 @@ if str(_HERE / "stt_lib") not in sys.path:
 import audio
 from speech import AudioPlayer, UnsupportedAudioFormat
 from tts_client import SapiTTS, make_tts
-from voices import make_tts as make_tts_from_pack
+from voices import make_configured_tts
 from contracts import VoicePack
 
 
@@ -36,7 +36,8 @@ class LocalTTS:
 
     def __init__(self, output_device: str = "") -> None:
         self.output_device = output_device or audio.current()["output"]
-        self.engine = make_tts() or SapiTTS()
+        # Honour TTS_VOICEPACK (voice chosen in the UI); fall back to auto.
+        self.engine = make_configured_tts() or SapiTTS()
         self.player = AudioPlayer(output_device=self.output_device)
         self.last_error: Optional[str] = None
 

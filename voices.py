@@ -108,3 +108,51 @@ def make_tts(pack: Optional[VoicePack] = None):
     if engine is not None and getattr(engine, "available", False):
         return engine
     return None
+
+
+def resolve_pack(pack_id: str) -> Optional[VoicePack]:
+    """Resolve a ``TTS_VOICEPACK`` id to a VoicePack.
+
+    Matches a listed voice by id, else parses ``provider:voice`` directly.
+    """
+    pid = (pack_id or "").strip()
+    if not pid:
+        return None
+    try:
+        for v in list_voices():
+            if v.id == pid:
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    if ":" in pid:
+        provider, voice = pid.split(":", 1)
+        return VoicePack(id=pid, provider=provider.strip(), voice=voice)
+    return None
+
+
+def make_configured_tts(config=None):
+    """Build the TTS engine honouring ``TTS_VOICEPACK`` (falls back to auto).
+
+    This is the entry point the app should use so a voice chosen in the UI
+    actually takes effect.
+    """
+    cfg = config
+    if cfg is None:
+        try:
+            from config import get_config
+            cfg = get_config()
+        except Exception:  # noqa: BLE001
+            cfg = None
+    pack_id = ""
+    if cfg is not None:
+        try:
+            pack_id = cfg.get("TTS_VOICEPACK", "") or ""
+        except Exception:  # noqa: BLE001
+            pack_id = ""
+    if pack_id:
+        pack = resolve_pack(pack_id)
+        if pack is not None:
+            engine = make_tts(pack)
+            if engine is not None:
+                return engine
+    return make_tts(None)

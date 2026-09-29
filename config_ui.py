@@ -37,7 +37,7 @@ def _settings_payload() -> List[Dict[str, Any]]:
             "key": s.key, "type": s.type, "default": s.default,
             "value": value, "group": s.group, "label": s.label,
             "help": s.help, "label_en": s.label_en, "help_en": s.help_en,
-            "choices": list(s.choices),
+            "choices": list(s.choices), "choices_from": s.choices_from,
             "min": s.min_value, "max": s.max_value,
             "restart_required": s.restart_required, "secret": s.secret,
         })
@@ -79,7 +79,7 @@ def _page() -> str:
 <title>F1 Race Engineer 设置</title><style>
 body{font-family:system-ui,Segoe UI,sans-serif;max-width:860px;margin:20px auto;padding:0 16px}
 h2{border-bottom:1px solid #ddd;padding-top:14px}
-.row{display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+.row{display:flex;gap:10px;align-items:center;margin:8px 0}
 label{flex:0 0 280px;font-size:14px}
 .hint{color:#888;font-size:12px;margin-top:2px}
 input,select{flex:1;padding:5px 8px}
@@ -88,20 +88,29 @@ button{padding:6px 14px;margin-top:12px}
 .err{color:#c00}
 .lang{float:right;font-size:13px}
 .lang a{color:#06c;text-decoration:none;margin-left:8px}
+#tip{position:fixed;display:none;pointer-events:none;z-index:9999;max-width:380px;
+     background:#0b1218;color:#e6edf3;border:1px solid #2a3542;padding:7px 10px;
+     border-radius:8px;font-size:12px;line-height:1.55;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+[data-help]{cursor:help}
 </style></head><body>
+<div id="tip"></div>
 <h1>F1 Race Engineer 设置 <span class="lang">
   <a href="#" id="zh">中文</a><a href="#" id="en">English</a></span></h1>
-<p class="hint" id="tip">保存后写入 .env；运行中的进程会自动热加载。</p>
+<p class="hint" id="tipLine">保存后写入 .env；运行中的进程会自动热加载。</p>
 <div id="form"></div>
 <button id="saveBtn" onclick="save()">保存</button><span id="msg" class="msg"></span>
 <script>
-let schema=[], groups={};
+let schema=[], groups={}, voices=null;
 let LANG = localStorage.getItem('f1tr_lang') || 'zh';
 const T = {
   zh:{tip:'保存后写入 .env；运行中的进程会自动热加载。', save:'保存', saved:'已保存',
-      partial:'部分失败: ', restart:' · 需重启', on:'开', off:'关'},
+      partial:'部分失败: ', restart:' · 需重启', on:'开', off:'关',
+      auto:'（自动）', bind:'⌨ 按键绑定', bindWait:'请按一下要绑定的键…',
+      bindOk:'✓ 已识别：', bindNone:'没检测到按键（超时）'},
   en:{tip:'Saved to .env; the running app hot-reloads it.', save:'Save', saved:'Saved',
-      partial:'Some failed: ', restart:' · restart', on:'On', off:'Off'}
+      partial:'Some failed: ', restart:' · restart', on:'On', off:'Off',
+      auto:'(auto)', bind:'⌨ Bind key', bindWait:'Press the key to bind…',
+      bindOk:'✓ Detected: ', bindNone:'No key detected (timeout)'}
 };
 function t(k){ return (T[LANG]||T.zh)[k]; }
 function pick(obj, base){ return LANG==='en' ? (obj[base+'_en']||obj[base]) : (obj[base]||obj[base+'_en']); }
@@ -115,29 +124,56 @@ async function load(){
     const gl = groups[g] ? groups[g][LANG] : g;
     html+=`<h2>${gl}</h2>`;
     for(const s of byGroup[g]){
+      const id='f_'+s.key;
       let input;
-      if(s.type==='bool'){
-        input=`<select id="f_${s.key}"><option value="1">${t('on')}</option><option value="0">${t('off')}</option></select>`;
+      if(s.choices_from==='voices'){
+        input=`<select id="${id}"><option value="">${t('auto')}</option></select>`;
+      }else if(s.type==='bool'){
+        input=`<select id="${id}"><option value="1">${t('on')}</option><option value="0">${t('off')}</option></select>`;
       }else if(s.type==='enum'){
-        input=`<select id="f_${s.key}">`+s.choices.map(c=>`<option>${c}</option>`).join('')+`</select>`;
+        input=`<select id="${id}">`+s.choices.map(c=>`<option>${c}</option>`).join('')+`</select>`;
       }else{
-        input=`<input id="f_${s.key}" value="${s.value==null?'':s.value}">`;
+        input=`<input id="${id}" value="${s.value==null?'':s.value}">`;
       }
-      const help = pick(s,'help');
-      html+=`<div class="row"><label>${pick(s,'label')||s.key}`
-          +`<div class="hint">${s.key}${s.restart_required?t('restart'):''}`
-          +(help?`<br>${help}`:'')+`</div></label>${input}</div>`;
+      const bind = (s.key==='PTT_BINDING') ? `<button type="button" class="bindBtn" data-for="${id}" style="margin-top:0;margin-left:6px;">${t('bind')}</button>` : '';
+      html+=`<div class="row" data-help-holder="${id}"><label>${pick(s,'label')||s.key}`
+          +`<div class="hint">${s.key}${s.restart_required?t('restart'):''}</div></label>`
+          +`<span style="flex:1;display:flex;align-items:center;">${input}${bind}</span></div>`;
     }
   }
   document.getElementById('form').innerHTML=html;
   for(const s of schema){
-    const el=document.getElementById('f_'+s.key); if(!el) continue;
+    const el=document.getElementById('f_'+s.key);
+    if(!el) continue;
     if(s.type==='bool'){ const v=String(s.value).toLowerCase();
       el.value=(v==='1'||v==='true'||v==='on')?'1':'0'; }
+    else if(s.choices_from==='voices'){ await fillVoices(el, s.value); }
     else el.value=s.value==null?'':s.value;
   }
-  document.getElementById('tip').textContent=t('tip');
+  // tooltips: hover anywhere on a row
+  for(const s of schema){
+    const holder=document.querySelector(`[data-help-holder="f_${s.key}"]`);
+    const help=pick(s,'help');
+    if(holder && help) holder.setAttribute('data-help', help);
+  }
+  document.querySelectorAll('.bindBtn').forEach(b=>{ b.onclick=()=>startBind(b.getAttribute('data-for')); });
+  document.getElementById('tipLine').textContent=t('tip');
   document.getElementById('saveBtn').textContent=t('save');
+}
+async function fillVoices(sel, cur){
+  if(!voices){ try{ const r=await fetch('/api/voices'); voices=(await r.json()).voices||[]; }catch(e){ voices=[]; } }
+  for(const v of voices){ const o=document.createElement('option'); o.value=v.id; o.textContent=v.label||v.id; sel.appendChild(o); }
+  if(cur) sel.value=cur;
+}
+async function startBind(inputId){
+  const m=document.getElementById('msg'); m.className='msg'; m.textContent=t('bindWait');
+  try{
+    const r=await fetch('/api/bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeout_s:8})});
+    const d=await r.json();
+    if(d.binding){ const el=document.getElementById(inputId); if(el) el.value=d.binding;
+      m.textContent=t('bindOk')+d.binding; }
+    else { m.className='msg err'; m.textContent=t('bindNone'); }
+  }catch(e){ m.className='msg err'; m.textContent=t('bindNone'); }
 }
 async function save(){
   const updates={};
@@ -148,9 +184,28 @@ async function save(){
   if(d.errors && Object.keys(d.errors).length){ m.className='msg err'; m.textContent=t('partial')+JSON.stringify(d.errors); }
   else { m.className='msg'; m.textContent=t('saved'); }
 }
-function setLang(l){ LANG=l; localStorage.setItem('f1tr_lang', l); load(); }
+function setLang(l){ LANG=l; localStorage.setItem('f1tr_lang', l); voices=null; load(); }
 document.getElementById('zh').onclick=(e)=>{e.preventDefault();setLang('zh');};
 document.getElementById('en').onclick=(e)=>{e.preventDefault();setLang('en');};
+// hover tooltip (same behaviour as the runtime panel)
+(function(){
+  const tip=document.getElementById('tip');
+  document.addEventListener('mouseover',(e)=>{
+    const el=e.target.closest && e.target.closest('[data-help]');
+    if(!el || !el.getAttribute('data-help')){ tip.style.display='none'; return; }
+    tip.textContent=el.getAttribute('data-help'); tip.style.display='block'; move(e);
+  });
+  document.addEventListener('mouseout',(e)=>{ const el=e.target.closest && e.target.closest('[data-help]'); if(el) tip.style.display='none'; });
+  function move(e){
+    if(tip.style.display!=='block') return;
+    const pad=14; let x=e.clientX+pad, y=e.clientY+pad; const r=tip.getBoundingClientRect();
+    if(x+r.width>window.innerWidth-8) x=e.clientX-r.width-pad;
+    if(y+r.height>window.innerHeight-8) y=e.clientY-r.height-pad;
+    tip.style.left=Math.max(4,x)+'px'; tip.style.top=Math.max(4,y)+'px';
+  }
+  document.addEventListener('mousemove',move);
+  window.addEventListener('scroll',()=>{tip.style.display='none';},true);
+})();
 load();
 </script></body></html>"""
 
@@ -227,7 +282,19 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/llm_test":
             self._json(200, _llm_test())
         elif path == "/api/bind":
-            self._json(200, {"binding": data.get("binding", "")})
+            timeout = data.get("timeout_s", 8) if isinstance(data, dict) else 8
+            try:
+                timeout = max(1.0, min(30.0, float(timeout)))
+            except (TypeError, ValueError):
+                timeout = 8.0
+            from input_sources import capture_keyboard_binding
+            try:
+                got = capture_keyboard_binding(timeout_s=timeout)
+            except Exception as e:  # noqa: BLE001
+                got = None
+                self._json(200, {"binding": "", "error": str(e)})
+                return
+            self._json(200, got or {"binding": "", "error": "nothing detected"})
         else:
             self._json(404, {"error": "not found"})
 

@@ -85,4 +85,72 @@ def test_config_page_has_lang_toggle_and_groups():
     page = config_ui._page()
     assert 'id="zh"' in page and 'id="en"' in page
     assert "groups" in page          # group labels come from the payload
-    assert "help" in page            # concrete help is rendered
+    assert "help" in page            # concrete help is available
+
+
+# ------------------------------------------------------------- help as tooltip
+
+def test_help_is_hover_tooltip_not_inline_density():
+    p = webui.PAGE
+    assert 'id="tip"' in p
+    assert "data-help" in p
+    assert "mousemove" in p
+    # the dense inline help block was removed
+    assert "color:#7c8794" not in p
+
+
+# ------------------------------------------------------------- voices dropdown
+
+def test_voice_pack_is_a_dropdown_source():
+    s = config_schema.get_setting("TTS_VOICEPACK")
+    assert s is not None and s.choices_from == "voices"
+
+
+def test_settings_payload_exposes_choices_from():
+    items = config_ui._settings_payload()
+    for it in items:
+        assert "choices_from" in it
+    vp = next(x for x in items if x["key"] == "TTS_VOICEPACK")
+    assert vp["choices_from"] == "voices"
+
+
+def test_resolve_pack_parses_provider_voice():
+    from voices import resolve_pack
+    p = resolve_pack("piper:piper_models/zh_CN-huayan-x_low.onnx")
+    assert p is not None and p.provider == "piper" and p.voice.endswith(".onnx")
+    assert resolve_pack("") is None
+    assert resolve_pack("garbage") is None
+
+
+def test_make_configured_tts_honours_voicepack():
+    from voices import make_configured_tts
+
+    class Cfg:
+        def get(self, k, d=""):
+            return {"TTS_VOICEPACK": "sapi:Microsoft Huihui Desktop"}.get(k, d)
+
+    eng = make_configured_tts(Cfg())
+    assert eng is None or getattr(eng, "name", "") == "sapi"
+
+
+# ------------------------------------------------------------- PTT capture
+
+def test_capture_keyboard_binding_times_out():
+    import input_sources as IS
+    seq = iter([0.0, 0.0, 100.0, 100.0, 100.0])
+    got = IS.capture_keyboard_binding(timeout_s=1.0, clock=lambda: next(seq, 100.0),
+                                      sleep=lambda s: None)
+    assert got is None
+
+
+def test_web_has_bind_and_voices_endpoints():
+    import inspect
+
+    import webui
+    src = inspect.getsource(webui._Handler)
+    assert "/api/bind" in src
+    assert "/api/voices" in src
+    assert "capture_keyboard_binding" in src
+    # UI wiring
+    assert "startBind" in webui.PAGE and "populateVoices" in webui.PAGE
+

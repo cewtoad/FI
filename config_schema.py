@@ -27,6 +27,9 @@ class Setting:
     label_en: str = ""        # English label
     help_en: str = ""         # English help
     choices: Tuple[str, ...] = ()
+    # Name of a dynamic option source (e.g. "voices" -> /api/voices) used by the
+    # UI to render a dropdown instead of a free-text field.
+    choices_from: str = ""
     min_value: Optional[float] = None
     max_value: Optional[float] = None
     # Runtime-mutable by default (the config page writes settings via
@@ -144,8 +147,9 @@ SCHEMA: Tuple[Setting, ...] = (
     Setting("TTS_VOLUME", "float", 1.0, "voice", "音量", "0.0-2.0，1.0=原始音量",
             "Volume", "0.0-2.0, 1.0=original",
             min_value=0.0, max_value=2.0),
-    Setting("TTS_VOICEPACK", "str", "", "voice", "语音包", "从语音包列表选（留空=按 TTS_PROVIDER 自动选 SAPI/Piper）",
-            "Voice pack", "Pick from the voice list; empty = auto by TTS_PROVIDER"),
+    Setting("TTS_VOICEPACK", "str", "", "voice", "语音包", "从下方列表选一个发声人（留空=按 TTS_PROVIDER 自动：有 Piper 用 Piper，否则 SAPI）",
+            "Voice", "Pick a voice from the list (empty = auto by TTS_PROVIDER)",
+            choices_from="voices"),
     Setting("TTS_PIPER_VOICE", "str", "", "voice", "Piper 模型路径", "本地 .onnx 路径；用 Piper 播报时必填（完全离线）",
             "Piper model path", "Local .onnx path; required for Piper (fully offline)"),
     # ---- Debrief / config UI (§6.4) ----
