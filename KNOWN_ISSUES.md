@@ -215,10 +215,24 @@
 | 输入方式 | 状态 | 绑定格式 | 备注 |
 |---|---|---|---|
 | 键盘 | ✅ 可用（默认） | `kb:<vk>`，默认 `kb:0x6B`（小键盘 +） | 全屏可用，Raw Input 只订阅 |
-| DualSense 手柄 | ⚠️ 未闭环（本机实测失败） | `hid:VID:PID:byte:mask` | 见下方"实测记录" |
+| DualSense 手柄 | ✅ 已闭环（2026-10-02 实测） | `hid:VID:PID:byte:mask`，R1 = `hid:054C:0CE6:9:0x02` | USB；见下方"实测记录"与闭环说明 |
 | 方向盘 / 其他外设 | ⏳ 未做（用户暂无设备） | 同上（通用 HID） | 待有设备后按同一流程做 |
+| Xbox 手柄（045E） | 🟡 已适配、待硬件实测（用户暂未接入） | 同上（通用 HID，捕获向导自动适配） | 走微软 XInput 驱动栈，Raw Input 同样以 usage 0x01/0x05 送 20 字节左右报文；按键为位域（无 hat 值问题）。已做适配：VID 级时机配置（基线 0.5s/按住 0.12s）、pending 卡死保护（计数器位假按住 >2.5s 自动拉黑继续扫描）、describe_binding Xbox 前缀。待实测：实际报文字节布局（按键是否落 byte4-15）、稀疏发帧下的捕获体验 |
 
-### 实测记录：DualSense（VID_054C PID_0CE6）— 未闭环
+### ✅ DualSense 已闭环（2026-10-02）
+
+- **布局有权威文档**（nondebug/dualsense，与 Linux 内核 hid-playstation.c 一致），本就无需"探测发现"。
+- **旧探测失败根因**：① `RegisterRawInputDevices` 每次调用**整体替换**注册表，旧 probe 分两次注册后只剩 Joystick usage 生效；② `--hold-now` 被摇杆中位（0x7e/0x81/0x84/0x84）的常量位淹没；③ 报文本身一直正确（len=64、id=0x01、250Hz，静止 20+ 字节变化=序列号+陀螺仪+加速度计）——按钮位始终在报文里。
+- **实测确认**（独立脚本，边沿干净无抖动）：R1=byte9/0x02（9 次含 2.3s 长按）、✕=byte8/0x20（14 次）、△=byte8/0x80、Create=byte9/0x10、Options=byte9/0x20、十字键=byte8 低半字节（0=N 2=E 4=S 6=W 8=中位）。蓝牙连接布局不同（0x01 为 10 字节紧凑报文），首版仅支持 USB。
+- **落地**：`HidSource` 已实现并默认启用——单次数组注册 Gamepad(0x01/0x05)+Joystick(0x01/0x04)（修掉整体替换坑）、按设备路径过滤 VID/PID（第二个手柄不会误触发）、短报告忽略防假释放、`run_blocking` 走主线程（与键盘同模式）；`voice_main` 改走 `make_source` 统一分派，hid 绑定不再静默回退键盘；新增 `tests/test_hid_source.py`（合成报文锁定边沿逻辑）。
+- **首测失败修复（2026-10-03）**：`_device_matches` 原"NULL 缓冲两段式"查询设备名对 `GetRawInputDeviceInfoW(RIDI_DEVICENAME)` 不生效，返回空导致所有报告被 VID/PID 过滤器静默拦掉；改为预分配缓冲单次调用后 250Hz 全通。教训：ctypes 调查询类 Win32 API 不要用两段式 NULL 缓冲惯例，直接预 sizing。
+- **模块化 + 按键捕获向导（2026-10-03）**：输入源拆分为 `inputs/` 包（`base`/`bindings`/`keyboard`/`hid`），`input_sources.py` 保留兼容门面，build_manifest 把 `inputs/` 加入 RESOURCE_DIRS 与 hidden-imports；新增 `capture_hid_binding`（基线学习静息位地板 → 首个持续 ≥0.25s 的 0→1 位 → **松开确认**，VID/PID 从设备路径自动解析，基线期已按住的键不可捕获——先松开再捕获）；网页【功能设置】PTT 按键行新增设备下拉（键盘/手柄）+ 一键捕获，`/api/bind` 支持 `{"device": "hid"}`；`PTT_MODE`（hold/toggle）本就在同页可选。
+- **捕获向导两个实机 bug 修复（2026-10-03）**：① **假捕获**——空手复现 `hid:054C:0CE6:13:0x1`：DS 的 payload 计数器字节（12-15）高位可停留数秒，通用扫描范围 byte4-15 会把它当按键；修复 = 已知 DualSense 只扫文档按钮字节 8-10（其他设备仍 4-15）+ **松开确认**（计数器位长期停留无法"松开"，自然被拒）。② **同进程重复捕获秒退**——`GetMessageW+PostQuitMessage` 的 WM_QUIT 残留在线程消息队列（keep-alive HTTP 线程会复用），且固定窗口类名使第二次 RegisterClassW 失败、窗口路由到已回收的回调（潜在崩溃）；修复 = PeekMessage 泵（不用 quit 标志）+ 每次捕获唯一窗口类名 + `DestroyWindow` 同步拆除。教训：线程内做 Win32 消息泵不要用 PostQuitMessage（污染线程队列），用 PeekMessage 轮询；ctypes 回调对象必须与窗口类/窗口同生命周期。
+- **十字键（hat）绑定（2026-10-03）**：DS 十字键是 byte8 低半字节的**值**（中位 0x08、北 0x00、东 0x02、南 0x04、西 0x06），位域扫描无法表达（北是清位、西/斜向位互相冲突）→ 新增 `hat:VID:PID:byte:value` 绑定类型（值匹配低半字节，中性 8 拒绝=永远按住）；CaptureScan 对已知 DS 单独学 hat 候选（基线学静息值→偏转持续 →回中确认），byte8 高半字节面键仍按位扫；HidSource 支持 hat 匹配（方向专属：滑到别的方向=松开）。
+- **L1/R2 捕获不到（2026-10-03）**：肩键/扳机习惯快速点按，旧的统一 0.25s 按住门槛把真实点按当"闪烁"拒绝。修复 = 按设备差异化时机：已知 DS 基线 0.8→0.5s、按住门槛 0.25→0.12s（候选空间已只剩纯按钮位，安全）；byte10 位掩码收紧到 0x07（bit3-7 是厂商计数区，永远不是按键）。其他设备维持 0.8s/0.25s。
+- **TTS 朗读规范化 + STT 进 UI（2026-10-03）**：新增 `tts_text.py`（圈速/差距/温度/P 名次/百分比/斜杠 → 可读中文；教训：Python re 的 \b 把 CJK 当 word 字符，无空格串"胎温97C"匹配不上，必须显式 lookaround），接线在 speech._do_synthesize（仅发音转换，原文保留）。STT 六个键（PROVIDER/LOCAL_MODEL/LOCAL_THREADS/API_KEY/BASE_URL/MODEL）首次进 config_schema（voice 组，功能设置可见，key 掩码）；AI 设置面板重构：服务商预设下拉（DeepSeek/硅基流动/OpenAI/Kimi/Qwen/Ollama/自定义，选中即填 URL+模型）+ 语音识别预设（本地默认 / 硅基流动 SenseVoice / OpenAI / 自定义），保存经 /api/settings 落 .env。
+
+### 实测记录：DualSense（VID_054C PID_0CE6）— 历史记录（当日已闭环）
 
 - 设备在系统中存在：`HID\VID_054C&PID_0CE6&MI_03`（`Get-PnpDevice -Class HIDClass`）。
 - Raw Input 能收到报告：`len=64`，`report_id=0x01`，约 250Hz，静止时平均
@@ -231,7 +245,7 @@
 - **推测根因**：本机 DualSense 的实体按键可能不在 gamepad usage(0x05)/joystick
   usage(0x04) 的这份报告里，而是走了另一个 HID 接口（如消费者控制 / vendor），
   或被系统以非标准方式上报。需要专门的接口枚举才能确认。
-- **决策**：按 R9 不盲目硬试偏移（避免随机猜）。**暂不接入手柄**，主路径用键盘。
+- **决策**：按 R9 不盲目硬试偏移（避免随机猜）——这一条是对的，但"暂不接入手柄"已被 2026-10-02 的文档核对 + 硬件实测推翻，见上方"已闭环"。
 
 ### 待办（后续单独完善，互不影响）
 

@@ -18,7 +18,10 @@
 - ⚔ **战况感知** — 位置变化事件，由游戏官方 OVTK 超车事件驱动
 - 📡 **主动播报**（v2）— 本地规则引擎，**不调用 LLM**：安全车/红旗/引擎故障即时播；进站窗口/油量/轮胎/降雨在**直道**播；只报窗口和后果，**不下指令**
 - 🧮 **推演层**（v2）— Stint 分段、磨损速率、配速衰退、与前/后车差距趋势（追近速率、预计几圈进入 1 秒）、进站窗口状态机、降雨 ETA
-- 🎙 **语音问答** — 按【小键盘 +】说话 → 本地语音识别 → AI 回答 → 语音播报（可完全离线）
+- 🎙 **语音问答** — 按键说话（小键盘 + 或手柄按键）→ 本地语音识别 → AI 回答 → 语音播报（可完全离线）
+- 🎮 **手柄 PTT**（v3）— DualSense 实测支持、Xbox 已适配：网页一键捕获任意按键生成绑定（普通键 + 十字键方向），按键解读实时显示
+- 🗣 **本地识别默认 SenseVoice**（v3）— 非自回归架构，比 whisper-small CPU 快 ~13 倍、中文更准（本机实测 5.1s 音频 0.51s）；`STT_LOCAL_ENGINE` 一键切回 whisper
+- 🔤 **TTS 朗读规范化**（v3）— 圈速/差距/温度/名次/百分比自动转可读中文（`1:31.204`→"1分31秒204"），只影响发音不改文本
 - 🎧 **观赛模式** — 焦点自动跟随被观看的车辆
 - 📝 **会话录制 + 赛后复盘**（v2）— JSON（原始）+ TXT（可读）；过终点自动生成本地复盘 TXT
 - 🖥 **双界面 + 配置页**（v2）— 网页面板（含实时功能开关） + 终端面板 + 独立配置页（`FI.py --config`）
@@ -40,7 +43,7 @@
 | 用法 | 解压 → 双击 `F1Engineer.exe`（或 `网页模式.bat` / `语音模式.bat`） | 解压 → 双击 `start.bat`（或 `网页模式.bat` / `语音模式.bat`） |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
 | 语音播报 | ✅ 已含 sounddevice/numpy，SAPI（中文音色）可用 | ✅ SAPI + 离线 Piper |
-| 语音识别 | 云端 STT（填 key） | **本地 whisper，完全离线** |
+| 语音识别 | 云端 STT（填 key） | **本地识别（SenseVoice/whisper），完全离线** |
 | 适合 | 大多数人、首次尝试 | 想离线 / 隐私 / 不想买 STT 额度 |
 
 两个包功能相同，只是语音识别后端不同。AI 未配置 key 时，**名次、圈速、油量、
@@ -116,7 +119,7 @@ py -3.12 voice_main.py
 
 语音采用**全本地**方案，按键说话，无需常驻监听。
 
-**触发**：游戏中按 **小键盘 +**（按一下开始录音，再按一下结束）
+**触发**：游戏中按 **小键盘 +**（默认，按一下开始录音，再按一下结束）或**手柄按键**（网页里一键捕获，见下方"输入源"）
 
 **流程**：按键 → 录音 → 本地语音识别 → AI 问答 → 语音播报
 
@@ -127,17 +130,19 @@ py -3.12 voice_main.py
 **1. 安装本地语音依赖**（装到项目内的 `stt_lib/`，不污染全局）
 
 ```
-py -3.12 -m pip install faster-whisper sounddevice --target stt_lib
+py -3.12 -m pip install sherpa-onnx sounddevice --target stt_lib
 ```
 
-**2. 下载语音模型**（下载到项目内的 `stt_models/`）
+**2. 下载语音识别模型**（默认引擎 SenseVoice-Small，约 240 MB，下载到 `stt_models/sensevoice/`）
 
 ```
-py -3.12 download_stt_model.py small
+py -3.12 -m tools.download_sensevoice
 ```
 
-> 国内网络若下载失败，先设置镜像：
-> `set HF_ENDPOINT=https://hf-mirror.com`
+> 想用回 faster-whisper：`py -3.12 -m pip install faster-whisper --target stt_lib`
+> + `py -3.12 download_stt_model.py small`，然后 `.env` 设 `STT_LOCAL_ENGINE=whisper`。
+> 两者速度对比（本机实测 5.1s 音频）：SenseVoice 0.51s vs whisper-small 6.77s。
+> 国内网络若下载失败，先设置镜像：`set HF_ENDPOINT=https://hf-mirror.com`
 
 **3. 运行**
 
@@ -211,22 +216,27 @@ py -3.12 FI.py --config        # 浏览器打开 http://127.0.0.1:8766
 ### 设置（网页模式内）
 
 网页面板（`127.0.0.1:8765`）顶部有两个独立入口：
-- **AI 设置** —— 填 API key / Base URL / 模型（不填也能用本地问答），保存即测连接；
-- **功能设置** —— 语音设备、主动播报（开关/话量/差距频率/闸门/提示音）、
-  语音与按键、推演阈值、赛后复盘等，勾选后保存即生效（写入 `.env`，部分项需重启）。
+- **AI 设置** —— **预设式**：AI 服务商下拉（DeepSeek/硅基流动/OpenAI/Kimi/Qwen/Ollama，
+  选中自动填地址和模型）+ 粘贴 key 即可；下方语音识别区块可选本地识别（默认）或
+  云端 API（硅基流动 SenseVoice / OpenAI / 自定义），保存即测连接；
+- **功能设置** —— 语音设备、PTT 按键（设备下拉 + 一键捕获 + 实时按键解读）、
+  主动播报（开关/话量/差距频率/闸门/提示音）、本地识别模型与线程、
+  推演阈值、赛后复盘等，勾选后保存即生效（写入 `.env`，部分项需重启）。
 
 更全的选项（语音包、绑定向导、高级）点「功能设置」里的链接跳到配置页（8766）。
 
 ### PTT 与车手名
 
 - **PTT 模式**：`PTT_MODE=hold`（按住说）/ `toggle`（按一下开始再按一下结束，默认）。
-- **触发键**：`PTT_BINDING`，格式 `kb:<vk>`（默认小键盘 +）或
-  `hid:VID:PID:byte:mask`（手柄/外设，见下方"输入源"）。
+- **触发键**：`PTT_BINDING`，格式 `kb:<vk>`（默认小键盘 +）、
+  `hid:VID:PID:byte:mask`（手柄普通键）或 `hat:VID:PID:byte:value`（十字键方向）——
+  网页【功能设置 → PTT 按键】一键捕获自动生成，旁边实时显示按键解读。
 - **车手名念法**：`DRIVER_NAME_STYLE=zh|en|number`（种子表 `data/driver_names.json`）。
 
 ### TTS 后端
 
-`TTS_PROVIDER=auto|sapi|piper|off`（本地播报只用 SAPI/Piper，均输出 WAV，无需任何解码器）：
+`TTS_PROVIDER=auto|sapi|piper|off`（本地播报只用 SAPI/Piper，均输出 WAV，无需任何解码器；
+播报前有朗读规范化层 `tts_text.py`，圈速/差距/温度/名次/百分比自动转可读中文）：
 - `sapi`：Windows 自带，零依赖（中文需系统中文语音包）；
 - `piper`：**完全离线**神经语音，需 `pip install "piper-tts[zh]"` 并下载模型
   （`py -3.12 -m tools.download_piper_voice`），设 `TTS_PIPER_VOICE=<.onnx 路径>`；
@@ -241,9 +251,14 @@ py -3.12 -m tools.replay sessions\race.f1rec --port 20777 --speed 2
 
 ### 输入源（键盘 / 手柄 / 方向盘）
 
-三种触发方式共享 `input_sources.py` 抽象，默认用键盘。手柄/外设的 Raw Input
-HID 偏移需实测（`py -3.12 -m tools.probe_dualsense`），详见 `KNOWN_ISSUES.md`
-的"输入触发方式"章节。改动面限制在 `input_sources.py` 一个文件，不影响主系统。
+PTT 触发源已模块化到 `inputs/` 包（`inputs/keyboard.py` 键盘、`inputs/hid.py`
+手柄/方向盘、`inputs/base.py` 公共基类，`input_sources.py` 保留兼容门面）。
+**DualSense 手柄已实测支持（USB）**；**Xbox 手柄已适配（机制同源，待硬件实测）**——
+两者都在网页【功能设置 → PTT 按键】选择设备后点【一键捕获】：按住想用的键再松开
+即自动生成绑定（普通按键 `hid:VID:PID:byte:mask`、十字键 `hat:VID:PID:byte:value`），
+旁边实时显示按键解读，保存后重启语音模式生效；`PTT 模式`（按住 / 按一下开始结束）
+同页可选。其他外设的 Raw Input 偏移也可用 `py -3.12 -m tools.probe_dualsense`
+确认，详见 `KNOWN_ISSUES.md` 的"输入触发方式"章节。
 
 ### 自检
 
@@ -288,7 +303,7 @@ py -3.12 FI.py --selftest      # 依赖/资源/端口/音频/SAPI 音色/LLM 一
 ### 为什么用 Raw Input / 本地识别？
 
 - **手柄按键**：DualSense/DS5 不是 XInput 设备，改用 Raw Input HID 检测（见 tools/probe_dualsense.py），不依赖 Steam Input/DS4Windows 映射。
-- **语音识别用本地 faster-whisper**，数据不出本机。
+- **语音识别默认本地 SenseVoice（可切 whisper / 云端）**，数据不出本机。
 
 ---
 
@@ -337,7 +352,7 @@ flowchart TD
     SUM --> REC
 ```
 
-详见 [DESIGN.md](DESIGN.md)。代码评审见 [CODE_REVIEW.md](CODE_REVIEW.md)，已知问题见 [KNOWN_ISSUES.md](KNOWN_ISSUES.md)。
+详见 [DESIGN.md](DESIGN.md)。代码评审见 [CODE_REVIEW.md](CODE_REVIEW.md)，已知问题见 [KNOWN_ISSUES.md](KNOWN_ISSUES.md)，迭代记录见 [SUMMARY_v3.md](SUMMARY_v3.md)。
 
 ---
 
@@ -362,7 +377,9 @@ F1_TR/
 ├── speech.py           唯一语音出口：SpeechArbiter + 非阻塞 AudioPlayer
 ├── voices.py           语音包 + TTS provider 注册表（SAPI / Piper）
 ├── names.py            车手名渲染（中文 / 英文 / 车号）
-├── input_sources.py    输入源抽象（键盘 / HID 手柄）
+├── inputs/             PTT 输入源包（base / bindings / keyboard / hid）
+├── input_sources.py    输入源兼容门面（转发到 inputs/ 包）
+├── tts_text.py         TTS 朗读规范化（圈速/名次/温度/百分比 → 可读中文）
 ├── ptt_controller.py   PTT 状态机（hold / toggle）
 ├── debrief.py          赛后复盘（本地 TXT，无 LLM）
 ├── voice_main.py       语音入口（走 build_app，含 PTT 与主动播报）
@@ -388,7 +405,7 @@ F1_TR/
 ├── 整体测试.bat        自检 + 运行测试（[7] 离线 / [8] 含网络音频）
 ├── 网页模式.bat / 语音模式.bat / start.bat / voice.bat   一键启动
 ├── data/               只读资源（driver_names.json 等）
-├── tools/              开发工具（udp_record / replay / make_zip / probe_dualsense…）
+├── tools/              开发工具（udp_record / replay / probe_dualsense / download_sensevoice…）
 ├── tests/              pytest 测试套件（tests/conftest.py 注入路径）
 ├── sandbox/            Windows Sandbox 干净机器验收器（make_wsb.py + .wsb）
 ├── lib/                核心库（第三方解析层，只读）
@@ -397,7 +414,7 @@ F1_TR/
 │   ├── telemetry_manager/  解析工厂 + 帧门
 │   ├── delta/              圈速 delta
 │   └── fuel_rate_recommender.py / rolling_history.py
-├── stt_lib/            本地语音依赖（faster-whisper / sounddevice / piper，全量包自带）
+├── stt_lib/            本地语音依赖（sherpa-onnx / faster-whisper / sounddevice / piper，全量包自带）
 ├── stt_models/         本地 whisper 模型（全量包自带）
 ├── piper_models/       离线 Piper 模型（可选）
 └── sessions/           自动生成的会话记录与复盘（运行时产生）
