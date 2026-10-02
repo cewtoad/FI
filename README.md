@@ -39,7 +39,7 @@
 
 | | **轻量核心包** `core` | **全量语音包** `full` |
 |---|---|---|
-| 体积 | 约 40 MB | 约 1.2 GB |
+| 体积 | 约 40 MB | 约 1.5 GB（含本地识别模型） |
 | 用法 | 解压 → 双击 `F1Engineer.exe`（或 `网页模式.bat` / `语音模式.bat`） | 解压 → 双击 `start.bat`（或 `网页模式.bat` / `语音模式.bat`） |
 | Python | 已内置，无需安装 | 已内置（embedded），无需安装 |
 | 语音播报 | ✅ 已含 sounddevice/numpy，SAPI（中文音色）可用 | ✅ SAPI + 离线 Piper |

@@ -85,9 +85,9 @@ jobs:
             ### 下载哪个？
             - **F1Engineer-core-*.zip**（约 40MB）：解压双击 `F1Engineer.exe`。
               已内置音频依赖（sounddevice/numpy），语音走云端 STT + Windows
-              SAPI/edge，填个 API key 即可；本地离线识别需用全量包。
-            - **F1Engineer-full-*.zip**（约 760MB，见下）：内置本地语音识别，
-              完全离线，解压即用。
+              SAPI/Piper，填个 API key 即可；本地离线识别需用全量包。
+            - **F1Engineer-full-*.zip**（约 1.5GB，本地构建上传）：内置本地语音识别
+              （SenseVoice-Small / faster-whisper + 模型），完全离线，解压即用。
 
             ### 校验
             下载后请核对 `SHA256SUMS.txt` 中的哈希值。
