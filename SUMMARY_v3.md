@@ -100,6 +100,24 @@ Xbox（VID 045E）走微软 XInput 驱动栈，Raw Input 同样以 usage 0x01/0x
 - 待硬件实测：报文字节布局（按键是否落扫描区）、稀疏发帧下"基线期按下 → 进静息地板，
   松开再按一次可捕获"的体验。接入后跑 f1tr_hidtest.py + 网页一键捕获即可闭环。
 
+## 5c. 发布 v0.5.0 与 CI 首绿修复
+
+- **打包**：全量包确认自带 STT 全套（stt_lib 整目录复制含 sherpa-onnx；
+  stt_models/sensevoice 普通目录不受 HF 缓存排除规则影响）；tools/ 首次进全量包
+  （udp_record/replay/download_sensevoice 是 README 给用户引用的）；
+  APP_VERSION 0.5.0，exe 版本资源 0.2.0.0→0.5.0.0；.env.example 补 STT 键说明。
+- **CI 首绿修复（重要根因）**：仓库根遗留的 pits-n-giggles 时代 `__init__.py`
+  （骨架 docstring，__version__=0.0.1，无任何代码引用）在 GitHub Actions 上
+  劫持了 `import FI`——CI 检出目录名叫 `FI`（D:\a\FI\FI），pytest 向上找
+  conftest 包名时把仓库根当作包 `FI`，先执行骨架 `__init__.py` 并缓存进
+  `sys.modules["FI"]`，之后测试里所有 `import FI` 都拿到骨架而不是启动器模块，
+  5 个测试全挂。本地目录名叫 F1_TR 故从未复现；且 release workflow 在 v0.5.0
+  之前从未真正跑过（历史 release 均为本地构建手动上传），所以一直没暴露。
+  修复 = 删除该文件；已用同名目录复现并验证。CI 全绿后 Release v0.5.0 自动
+  附 core 包；全量包本地构建（dist/F1Engineer-full-0.5.0-win64.zip，1.4GB，
+  已校验含 SenseVoice 模型/sherpa-onnx/inputs/tts_text/tools），手动拖传到
+  Release 页。
+
 ## 6. 测试
 
 新增 `tests/test_hid_source.py`（13 条：边沿/捕获状态机/hat/设备名匹配/人话解读）、

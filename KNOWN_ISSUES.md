@@ -2,6 +2,18 @@
 
 > 记录测试中发现但暂未修复的问题，供后续处理。
 
+## ✅ CI 首绿修复（2026-10-03，release workflow 首次真正运行）
+
+仓库根曾有一个 pits-n-giggles 时代的 `__init__.py`（骨架 docstring，无代码引用）。
+GitHub Actions 的检出目录名叫 `FI`（D:\a\FI\FI），pytest 解析根 conftest 包名时
+向上走 `__init__.py`，把仓库根当成了包 `FI` —— 导入 conftest 前先执行骨架
+`__init__.py` 并缓存进 `sys.modules["FI"]`，之后测试里所有 `import FI` 都拿到
+骨架而不是启动器模块（无 _port_busy/--selftest/--port），5 个测试必挂。
+本地目录名叫 F1_TR 所以从未复现；release workflow 在 v0.5.0 之前从未真正运行
+（历史 release 均为本地构建手动上传），因此一直没暴露。修复 = 删除该文件，
+同名目录已复现验证。教训：**不要在仓库根放 `__init__.py`**（尤其当仓库名与
+根模块同名时，CI/任意检出目录名都会触发包名遮蔽）。
+
 ## 审查第二轮修复（2026-09-27，全量 pytest 199 passed / 4 skipped）
 
 ### 严重（4）
