@@ -95,8 +95,9 @@ HIDDEN_IMPORT_MODULES = [
 ]
 
 # Read-only resource directories shipped as-is (inputs/ is the PTT source
-# package; the input_sources.py shim stays in RUNTIME_MODULES).
-RESOURCE_DIRS = ["lib", "data", "inputs"]
+# package; tools/ carries udp_record/replay/download_sensevoice referenced by
+# README for full-pack users; the input_sources.py shim stays in RUNTIME_MODULES).
+RESOURCE_DIRS = ["lib", "data", "inputs", "tools"]
 
 # Modules excluded from the core PyInstaller build (kept out of the light pack).
 PYINSTALLER_EXCLUDES = ["tkinter", "matplotlib", "faster_whisper", "ctranslate2"]
