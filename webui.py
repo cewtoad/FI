@@ -161,13 +161,27 @@ PAGE = r"""<!doctype html>
       <a href="#" id="setupClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;" data-i18n="common.close">关闭 ✕</a>
     </h2>
     <div style="font-size:12px;color:var(--dim);margin-bottom:6px;" data-i18n="ai.desc">
-      支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。
+      两步：选服务商 → 粘贴 key。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。
     </div>
+    <select id="setPreset" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-bottom:6px;"></select>
     <div class="row2">
       <input type="text" id="setBase" placeholder="Base URL（如 https://api.deepseek.com）" data-i18n-ph="ai.base">
-      <input type="text" id="setModel" placeholder="模型（如 deepseek-flash）" data-i18n-ph="ai.model">
+      <input type="text" id="setModel" placeholder="模型（如 deepseek-chat）" data-i18n-ph="ai.model">
     </div>
     <input type="password" id="setKey" placeholder="API Key（sk-...）" data-i18n-ph="ai.key">
+    <div style="font-size:13px;font-weight:600;margin:12px 0 4px;" data-i18n="ai.stt">🎙 语音识别（说话 → 文字）</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:6px;" data-i18n="ai.stt_desc">
+      默认本地识别（faster-whisper，离线、免费、约需数秒）。想要亚秒级识别可接云端。
+    </div>
+    <select id="setSttPreset" style="width:100%;background:#232a36;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-bottom:6px;"></select>
+    <div class="row2" id="sttCloudRow" style="display:none;">
+      <input type="text" id="setSttBase" placeholder="识别接口地址（https://...）" data-i18n-ph="ai.stt_base">
+      <input type="text" id="setSttModel" placeholder="识别模型（如 SenseVoiceSmall）" data-i18n-ph="ai.stt_model">
+    </div>
+    <input type="password" id="setSttKey" placeholder="识别 API Key（本地识别不用填）" data-i18n-ph="ai.stt_key" style="display:none;">
+    <div style="font-size:12px;color:var(--dim);margin-top:4px;" data-i18n="ai.stt_note">
+      本地模型大小 / 线程在【功能设置】里调；云端识别改动需重启语音模式生效。
+    </div>
     <div class="row2" style="margin-top:6px;">
       <button id="setSave" data-i18n="ai.save">保存并测试连接</button>
     </div>
@@ -266,11 +280,23 @@ const I18N = {
     "update.found":"发现新版本", "update.dl":"前往下载 →", "update.cur":"（当前 {v}）",
     "common.close":"关闭 ✕", "common.on":"开", "common.off":"关",
     "ai.title":"AI 设置（不填也能用本地问答）",
-    "ai.desc":"支持任意 OpenAI 兼容端点（DeepSeek / OpenAI / Moonshot / Qwen / 本地 Ollama）。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。",
-    "ai.base":"Base URL（如 https://api.deepseek.com）", "ai.model":"模型（如 deepseek-flash）",
+    "ai.desc":"两步：选服务商 → 粘贴 key。名次、圈速、油量、胎温、损伤等高频问题无需 key 即可回答。",
+    "ai.base":"Base URL（如 https://api.deepseek.com）", "ai.model":"模型（如 deepseek-chat）",
     "ai.key":"API Key（sk-...）", "ai.save":"保存并测试连接",
     "ai.saving":"保存中…", "ai.testing":"已保存，测试连接中…",
     "ai.ok":"✓ 连接成功，AI 已就绪", "ai.fail":"连接失败：{e}（本地问答仍可用）",
+    "ai.preset":"AI 服务商（自动填地址和模型）",
+    "ai.preset_deepseek":"DeepSeek（推荐）", "ai.preset_sf":"硅基流动 SiliconFlow", "ai.preset_openai":"OpenAI",
+    "ai.preset_moonshot":"月之暗面 Kimi", "ai.preset_qwen":"通义千问 Qwen", "ai.preset_ollama":"本地 Ollama",
+    "ai.preset_custom":"自定义…",
+    "ai.stt":"🎙 语音识别（说话 → 文字）",
+    "ai.stt_desc":"默认本地识别（faster-whisper，离线、免费、约需数秒）。想要亚秒级识别可接云端。",
+    "ai.stt_note":"本地模型大小 / 线程在【功能设置】里调；云端识别改动需重启语音模式生效。",
+    "ai.stt_base":"识别接口地址（https://...）", "ai.stt_model":"识别模型（如 SenseVoiceSmall）",
+    "ai.stt_key":"识别 API Key（本地识别不用填）",
+    "ai.stt_none":"本地识别（默认 · 离线免费）", "ai.stt_sf":"硅基流动 SenseVoice（中文最快，推荐）",
+    "ai.stt_oai":"OpenAI Whisper", "ai.stt_custom":"自定义云端…",
+    "ai.stt_saved":"；语音识别已保存（重启语音模式生效）", "ai.stt_err":"；语音识别保存失败：{e}",
     "feat.title":"功能设置", "feat.hint":"主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 .env（部分项需重启）。",
     "feat.save":"保存开关", "feat.full":"打开完整设置页(语音包 / 按键 / 高级) →",
     "feat.saving":"保存中…", "feat.saved":"✓ 已保存并生效", "feat.partial":"部分失败：",
@@ -288,19 +314,32 @@ const I18N = {
     "q.lap":"圈速差", "q.tyre":"轮胎", "q.fuel":"油量", "q.pos":"位置", "q.loss":"损失时间",
     "meta.packets":"已收 {a} 包 · 丢 {d} · 错误 {e}",
     "board.h":"P 车手", "board.h2":"轮胎  落后", "board.lead":"领先",
-    "bind.btn":"⌨ 按键绑定", "bind.wait":"请按一下要绑定的键…（键盘）",
-    "bind.ok":"✓ 已识别：{b}", "bind.none":"没检测到按键（超时）。手柄按键需系统能通过 Raw Input 收到。",
+    "bind.btn":"⌨ 一键捕获", "bind.wait":"先松开所有按键，然后按住想用的键再松开…",
+    "bind.ok":"✓ 已识别：{b}", "bind.none":"没检测到按键（超时）。手柄需用 USB 连接且系统 Raw Input 能收到。",
+    "bind.dev_kb":"键盘", "bind.dev_hid":"手柄", "bind.restart":"（保存后重启语音模式生效）",
     "ui.noanswer":""
   },
   en: {
     "update.found":"New version", "update.dl":"Download →", "update.cur":" (current {v})",
     "common.close":"Close ✕", "common.on":"On", "common.off":"Off",
     "ai.title":"AI settings (optional — local answers work without a key)",
-    "ai.desc":"Any OpenAI-compatible endpoint (DeepSeek / OpenAI / Moonshot / Qwen / local Ollama). Position, lap times, fuel, tyre temps and damage are answered locally without a key.",
-    "ai.base":"Base URL (e.g. https://api.deepseek.com)", "ai.model":"Model (e.g. deepseek-flash)",
+    "ai.desc":"Two steps: pick a provider, paste your key. Position, lap times, fuel, tyre temps and damage are answered locally without a key.",
+    "ai.base":"Base URL (e.g. https://api.deepseek.com)", "ai.model":"Model (e.g. deepseek-chat)",
     "ai.key":"API Key (sk-...)", "ai.save":"Save & test connection",
     "ai.saving":"Saving…", "ai.testing":"Saved, testing connection…",
     "ai.ok":"✓ Connected, AI ready", "ai.fail":"Connection failed: {e} (local answers still work)",
+    "ai.preset":"AI provider (fills URL & model)",
+    "ai.preset_deepseek":"DeepSeek (recommended)", "ai.preset_sf":"SiliconFlow", "ai.preset_openai":"OpenAI",
+    "ai.preset_moonshot":"Moonshot Kimi", "ai.preset_qwen":"Alibaba Qwen", "ai.preset_ollama":"Local Ollama",
+    "ai.preset_custom":"Custom…",
+    "ai.stt":"🎙 Speech-to-text (your voice → text)",
+    "ai.stt_desc":"Local faster-whisper by default (offline, free, a few seconds). Cloud APIs give sub-second results.",
+    "ai.stt_note":"Local model size / threads live in [Feature settings]; cloud STT changes need a voice-mode restart.",
+    "ai.stt_base":"STT base URL (https://...)", "ai.stt_model":"STT model (e.g. SenseVoiceSmall)",
+    "ai.stt_key":"STT API key (not needed for local)",
+    "ai.stt_none":"Local recognition (default · offline & free)", "ai.stt_sf":"SiliconFlow SenseVoice (fastest for Chinese)",
+    "ai.stt_oai":"OpenAI Whisper", "ai.stt_custom":"Custom cloud…",
+    "ai.stt_saved":"; STT saved (restart voice mode to apply)", "ai.stt_err":"; STT save failed: {e}",
     "feat.title":"Feature settings", "feat.hint":"Radio / voice / race model / debrief — saved to .env and applied live (some need a restart).",
     "feat.save":"Save", "feat.full":"Open full settings page (voice / keys / advanced) →",
     "feat.saving":"Saving…", "feat.saved":"✓ Saved", "feat.partial":"Some failed: ",
@@ -318,8 +357,9 @@ const I18N = {
     "q.lap":"Lap delta", "q.tyre":"Tyres", "q.fuel":"Fuel", "q.pos":"Position", "q.loss":"Time lost",
     "meta.packets":"rx {a} · dropped {d} · errors {e}",
     "board.h":"P Driver", "board.h2":"Tyre  Gap", "board.lead":"leader",
-    "bind.btn":"⌨ Bind key", "bind.wait":"Press the key to bind… (keyboard)",
-    "bind.ok":"✓ Detected: {b}", "bind.none":"No key detected (timeout). Gamepad buttons need to reach Raw Input.",
+    "bind.btn":"⌨ Capture key", "bind.wait":"Release everything, then press AND release the key to bind…",
+    "bind.ok":"✓ Detected: {b}", "bind.none":"No key detected (timeout). Gamepad must be USB and reachable via Raw Input.",
+    "bind.dev_kb":"Keyboard", "bind.dev_hid":"Gamepad", "bind.restart":" (restart voice mode after saving)",
     "ui.noanswer":""
   }
 };
@@ -344,7 +384,60 @@ function applyI18n(){
   loadAudio();
   loadFeatures();
 }
-function setLang(l){ LANG = l; localStorage.setItem('f1tr_lang', l); applyI18n(); }
+function setLang(l){ LANG = l; localStorage.setItem('f1tr_lang', l); applyI18n(); fillPresetSelects(); }
+// ---- AI / STT provider presets: pick a provider, paste a key ----
+const AI_PRESETS = {
+  deepseek:   {base:"https://api.deepseek.com", model:"deepseek-chat"},
+  siliconflow:{base:"https://api.siliconflow.cn/v1", model:"deepseek-ai/DeepSeek-V3"},
+  openai:     {base:"https://api.openai.com/v1", model:"gpt-4o-mini"},
+  moonshot:   {base:"https://api.moonshot.cn/v1", model:"moonshot-v1-8k"},
+  qwen:       {base:"https://dashscope.aliyuncs.com/compatible-mode/v1", model:"qwen-plus"},
+  ollama:     {base:"http://localhost:11434/v1", model:"qwen2.5:7b"},
+  custom:     {base:"", model:""},
+};
+const STT_PRESETS = {
+  siliconflow: {base:"https://api.siliconflow.cn/v1", model:"SenseVoiceSmall"},
+  openai:      {base:"https://api.openai.com/v1", model:"whisper-1"},
+  custom:      {base:"", model:""},
+};
+function fillPresetSelects(){
+  const build = (id, items) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = "";
+    for (const [k, key] of items){
+      const o = document.createElement("option"); o.value = k; o.textContent = t(key);
+      sel.appendChild(o);
+    }
+    sel.value = cur || items[0][0];
+  };
+  build("setPreset", [["deepseek","ai.preset_deepseek"],["siliconflow","ai.preset_sf"],
+    ["openai","ai.preset_openai"],["moonshot","ai.preset_moonshot"],
+    ["qwen","ai.preset_qwen"],["ollama","ai.preset_ollama"],["custom","ai.preset_custom"]]);
+  build("setSttPreset", [["none","ai.stt_none"],["siliconflow","ai.stt_sf"],
+    ["openai","ai.stt_oai"],["custom","ai.stt_custom"]]);
+}
+(function initPresets(){
+  const ai = document.getElementById("setPreset");
+  if (ai) ai.addEventListener("change", () => {
+    const p = AI_PRESETS[ai.value] || {base:"", model:""};
+    document.getElementById("setBase").value = p.base;
+    document.getElementById("setModel").value = p.model;
+  });
+  const st = document.getElementById("setSttPreset");
+  if (st) st.addEventListener("change", () => {
+    const cloud = st.value !== "none";
+    document.getElementById("sttCloudRow").style.display = cloud ? "flex" : "none";
+    document.getElementById("setSttKey").style.display = cloud ? "block" : "none";
+    const p = STT_PRESETS[st.value];
+    if (p){
+      document.getElementById("setSttBase").value = p.base;
+      document.getElementById("setSttModel").value = p.model;
+    }
+  });
+  fillPresetSelects();
+})();
 const FACTS_CN = {
   lap:"圈数", position:"位置", current_lap_time:"当前圈", last_lap_time:"上一圈",
   best_lap_time:"最快圈", delta_to_best:"vs最快圈", sector1:"S1", sector2:"S2", sector3:"S3",
@@ -462,6 +555,23 @@ async function refreshSetup(){
       if (!document.getElementById("setModel").value) document.getElementById("setModel").value = eng.model || "deepseek-flash";
     }
     llmKnown = true;
+    // Prefill the STT section from persisted settings (key stays masked out).
+    try {
+      const sr = await fetch("/api/settings");
+      const sd = await sr.json();
+      const map = {};
+      for (const s of (sd.settings || [])) map[s.key] = s.value;
+      const sb = String(map.STT_BASE_URL || "");
+      const sm = String(map.STT_MODEL || "");
+      if (sb && !document.getElementById("setSttBase").value) document.getElementById("setSttBase").value = sb;
+      if (sm && !document.getElementById("setSttModel").value) document.getElementById("setSttModel").value = sm;
+      if (sb){
+        const st = document.getElementById("setSttPreset");
+        st.value = sb.includes("siliconflow") ? "siliconflow" : (sb.includes("openai") ? "openai" : "custom");
+        document.getElementById("sttCloudRow").style.display = "flex";
+        document.getElementById("setSttKey").style.display = "block";
+      }
+    } catch(e2){}
   } catch(e){}
 }
 async function saveSetup(){
@@ -478,7 +588,31 @@ async function saveSetup(){
     await fetch("/api/llm", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
     msg.textContent = t("ai.testing");
     const r = await fetch("/api/models");
-    if (r.ok){ msg.className = "meta ok"; msg.textContent = t("ai.ok"); document.getElementById("setKey").value = ""; }
+    if (r.ok){
+      document.getElementById("setKey").value = "";
+      // STT fields persist through the generic settings endpoint (.env).
+      let note = "";
+      try {
+        const st = document.getElementById("setSttPreset").value;
+        const updates = {};
+        if (st !== "none"){
+          updates.STT_PROVIDER = "cloud";
+          const sb = document.getElementById("setSttBase").value.trim();
+          const sm = document.getElementById("setSttModel").value.trim();
+          const sk = document.getElementById("setSttKey").value.trim();
+          if (sb) updates.STT_BASE_URL = sb;
+          if (sm) updates.STT_MODEL = sm;
+          if (sk) updates.STT_API_KEY = sk;
+        }
+        if (Object.keys(updates).length){
+          const sr = await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(updates)});
+          const sd = await sr.json();
+          const errs = Object.keys(sd.errors || {});
+          note = errs.length ? t("ai.stt_err", {e: sd.errors[errs[0]]}) : t("ai.stt_saved");
+        }
+      } catch(e2){ note = t("ai.stt_err", {e: e2}); }
+      msg.className = "meta ok"; msg.textContent = t("ai.ok") + note;
+    }
     else { const e = await r.json(); msg.className = "meta bad"; msg.textContent = t("ai.fail", {e:(e.error||r.status)}); }
   } catch(e){ msg.className = "meta bad"; msg.textContent = t("ai.fail", {e:e}); }
 }
@@ -524,11 +658,16 @@ async function loadFeatures(){
         } else {
           input = `<input id="${id}" value="${s.value}">`;
         }
-        const bindBtn = (s.key === "PTT_BINDING")
-          ? `<button type="button" id="bindBtn" style="margin-left:6px;padding:6px 10px;">${t('bind.btn')}</button>` : "";
+        const bindCtl = (s.key === "PTT_BINDING")
+          ? `<select id="bindDev" style="margin-right:6px;padding:6px 8px;">
+               <option value="kb">${t('bind.dev_kb')}</option>
+               <option value="hid">${t('bind.dev_hid')}</option>
+             </select>`
+          + `<button type="button" id="bindBtn" style="padding:6px 10px;">${t('bind.btn')}</button>`
+          + `<span id="bindingName" style="margin-left:8px;font-size:12px;color:var(--accent);"></span>` : "";
         html += `<div class="row2" style="align-items:center;margin:4px 0;">`
               + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${pick(s,"label")||s.key}</label>`
-              + `<span style="flex:1;display:flex;align-items:center;">${input}${bindBtn}</span></div>`;
+              + `<span style="flex:1;display:flex;align-items:center;">${input}${bindCtl}</span></div>`;
       }
     }
     document.getElementById("featForm").innerHTML = html || `<span class='meta'>${LANG==='en'?'nothing to set':'无可调项'}</span>`;
@@ -548,7 +687,33 @@ async function loadFeatures(){
     }
     const bb = document.getElementById("bindBtn");
     if (bb) bb.onclick = startBind;
+    // Pre-select the capture device to match the current binding.
+    const bd = document.getElementById("bindDev");
+    if (bd){
+      const cur = String((featSchema.find(x => x.key === "PTT_BINDING") || {}).value || "");
+      bd.value = (cur.startsWith("hid:") || cur.startsWith("hat:")) ? "hid" : "kb";
+    }
+    // Show what the bound key actually IS (= 手柄 R1 / = 键盘 小键盘+).
+    const bel = document.getElementById("f_PTT_BINDING");
+    if (bel){
+      bel.addEventListener("input", () => { clearTimeout(bindingNameTimer);
+        bindingNameTimer = setTimeout(updateBindingName, 300); });
+      updateBindingName();
+    }
   } catch(e){}
+}
+let bindingNameTimer = null;
+async function updateBindingName(){
+  const el = document.getElementById("f_PTT_BINDING");
+  const out = document.getElementById("bindingName");
+  if (!el || !out) return;
+  const b = el.value.trim();
+  if (!b){ out.textContent = ""; return; }
+  try {
+    const r = await fetch("/api/binding_name?b=" + encodeURIComponent(b));
+    const d = await r.json();
+    out.textContent = "= " + (LANG === 'en' ? (d.name_en || d.name) : d.name);
+  } catch(e){ out.textContent = ""; }
 }
 let voicesCache = null;
 async function populateVoices(sel, cur){
@@ -568,16 +733,20 @@ async function populateVoices(sel, cur){
 async function startBind(){
   const msg = document.getElementById("featMsg");
   const btn = document.getElementById("bindBtn");
+  const devSel = document.getElementById("bindDev");
+  const dev = devSel ? devSel.value : "kb";
   if (btn){ btn.disabled = true; btn.textContent = t('bind.wait'); }
   msg.className = "meta"; msg.textContent = t('bind.wait');
   try {
     const r = await fetch("/api/bind", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({timeout_s: 8})});
+      body: JSON.stringify({timeout_s: 8, device: dev})});
     const d = await r.json();
     if (d.binding){
       const el = document.getElementById("f_PTT_BINDING");
       if (el) el.value = d.binding;
-      msg.className = "meta ok"; msg.textContent = t('bind.ok', {b:d.binding});
+      updateBindingName();
+      msg.className = "meta ok"; msg.textContent = t('bind.ok', {b:d.binding})
+        + (dev === "hid" ? t('bind.restart') : "");
     } else {
       msg.className = "meta bad"; msg.textContent = t('bind.none');
     }
@@ -839,6 +1008,13 @@ class _Handler(BaseHTTPRequestHandler):
                        "application/json; charset=utf-8")
         elif self.path == "/api/version":
             self._send_json(200, _check_update())
+        elif self.path.startswith("/api/binding_name"):
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            b = (q.get("b") or [""])[0][:64]
+            from input_sources import describe_binding
+            self._send_json(200, {"name": describe_binding(b, "zh"),
+                                  "name_en": describe_binding(b, "en")})
         elif self.path == "/api/llm":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             self._send_json(200, {"engineer": ctx["engineer"].describe()})
@@ -1036,7 +1212,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _bind(self) -> None:
         """POST /api/bind - capture the next key press as a PTT binding.
 
-        Body: {"timeout_s": 6}. Blocks until a key is pressed or timeout.
+        Body: {"timeout_s": 6, "device": "kb"|"hid"}. Blocks until a key is
+        pressed or timeout. "kb" polls GetAsyncKeyState; "hid" listens on Raw
+        Input for any gamepad button (result includes its VID:PID).
         """
         body = self._read_json()
         if body is None:
@@ -1046,9 +1224,14 @@ class _Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             timeout = 6.0
         timeout = max(1.0, min(30.0, timeout))
-        from input_sources import capture_keyboard_binding
+        device = str(body.get("device", "kb") or "kb").lower()
         try:
-            got = capture_keyboard_binding(timeout_s=timeout)
+            if device == "hid":
+                from input_sources import capture_hid_binding
+                got = capture_hid_binding(timeout_s=timeout)
+            else:
+                from input_sources import capture_keyboard_binding
+                got = capture_keyboard_binding(timeout_s=timeout)
         except Exception as e:  # noqa: BLE001
             self._send_json(200, {"binding": "", "error": str(e)})
             return

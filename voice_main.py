@@ -26,7 +26,6 @@ from engineer import Engineer
 from receiver import DEFAULT_PORT
 from stt_client import make_stt
 from voice_stt import StreamingRecorder
-from voice_trigger import RawKeyTrigger, TRIGGER_VK
 from voice_tts import LocalTTS
 
 MAX_RECORD_S = 10.0
@@ -60,7 +59,7 @@ class VoiceApp:
         self._busy = False
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
-        self.trigger: Optional[RawKeyTrigger] = None
+        self.trigger = None  # InputSource (keyboard or HID), built in run()
         # T6.2: PTT state machine driven by config (hold/toggle + double-tap).
         from config import get_config
         from ptt_controller import PTTController
@@ -135,7 +134,7 @@ class VoiceApp:
         self._timer = threading.Timer(MAX_RECORD_S + 0.5, self._auto_stop)
         self._timer.daemon = True
         self._timer.start()
-        print(f"[voice] ● 录音中…（再按小键盘+停止，{MAX_RECORD_S:.0f}s 自动停）",
+        print(f"[voice] ● 录音中…（再按 PTT 键停止，{MAX_RECORD_S:.0f}s 自动停）",
               flush=True)
 
     def _auto_stop(self) -> None:
@@ -240,7 +239,7 @@ class VoiceApp:
             print(f"[voice] TTS 耗时 {time.time()-t2:.2f}s", flush=True)
         finally:
             self._busy = False
-            print("[voice] 就绪，按小键盘+提问", flush=True)
+            print("[voice] 就绪，按 PTT 键提问", flush=True)
 
     def _get_stt(self):
         """Return the shared STT engine, building it once under a lock.
@@ -304,19 +303,26 @@ class VoiceApp:
             print("STT 就绪。", flush=True)
         threading.Thread(target=_preload, daemon=True).start()
 
-        # T6.1: resolve the PTT binding (kb:<vk> from config, default NUMPAD +).
+        # T6.1: resolve the PTT binding from config: kb:<vk> (default NUMPAD +)
+        # or hid:VID:PID:byte:mask (gamepad; DualSense R1 = hid:054C:0CE6:9:0x02).
         from config import get_config
-        from input_sources import parse_binding
-        binding = parse_binding(get_config().get("PTT_BINDING", "kb:0x6B"))
-        vk = binding["vk"] if binding and binding["type"] == "kb" else TRIGGER_VK
+        from input_sources import make_source
+        binding_str = get_config().get("PTT_BINDING", "kb:0x6B")
         # PTT is driven purely by press/release through the controller. Do NOT
         # also pass on_tap: RawKeyTrigger fires on_tap right after on_release,
         # which would immediately stop the recording we just started.
-        self.trigger = RawKeyTrigger(on_press=self._on_ptt_press,
-                                     on_release=self._on_ptt_release,
-                                     vk=vk)
+        trigger = make_source(binding_str,
+                              on_press=self._on_ptt_press,
+                              on_release=self._on_ptt_release)
+        if trigger is None:
+            print(f"PTT 绑定 {binding_str!r} 无效，回退默认小键盘+")
+            binding_str = "kb:0x6B"
+            trigger = make_source(binding_str,
+                                  on_press=self._on_ptt_press,
+                                  on_release=self._on_ptt_release)
+        self.trigger = trigger
         mode = self.ptt.mode
-        print(f"PTT 模式={mode}，按键 VK=0x{vk:02X}。按 {mode} 方式说话，Ctrl+C 退出。\n")
+        print(f"PTT 模式={mode}，触发={binding_str}。按 {mode} 方式说话，Ctrl+C 退出。\n")
         self.trigger.run_blocking()  # blocks (main thread)
 
 

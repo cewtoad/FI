@@ -82,12 +82,13 @@ def test_hid_button_pressed_from_fake_report():
     assert IS.hid_button_pressed(report, 99, 0x01) is False   # out of range
 
 
-def test_make_source_hid_disabled_until_probe():
-    # HID disabled by default (probe gate).
-    assert IS.make_source("hid:054C:0CE6:8:0x20") is None
+def test_make_source_hid_enabled_after_probe():
+    # DualSense layout confirmed on hardware (2026-10-02): HID on by default.
+    src = IS.make_source("hid:054C:0CE6:9:0x02")
+    assert isinstance(src, IS.HidSource)
+    assert (src.vid, src.pid, src.byte, src.mask) == (0x54C, 0xCE6, 9, 0x02)
     # Keyboard always available.
-    src = IS.make_source("kb:0x6B")
-    assert src is not None
+    assert IS.make_source("kb:0x6B") is not None
 
 
 # ------------------------------------------------------------------- names

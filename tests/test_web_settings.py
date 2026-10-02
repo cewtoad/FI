@@ -99,3 +99,35 @@ def test_post_settings_rejected_from_non_local(monkeypatch):
     finally:
         webui._Handler._local_only = orig
         httpd.shutdown(); httpd.server_close()
+
+
+def test_stt_settings_in_schema_and_panel():
+    """STT config lives in the schema (voice group) and the AI panel has the
+    preset-driven UI (provider select auto-fills URL/model)."""
+    import config_schema
+    keys = set(config_schema.SCHEMA_BY_KEY)
+    for key in ("STT_PROVIDER", "STT_LOCAL_MODEL", "STT_LOCAL_THREADS",
+                "STT_API_KEY", "STT_BASE_URL", "STT_MODEL"):
+        assert key in keys, key
+    by_key = config_schema.SCHEMA_BY_KEY
+    assert by_key["STT_PROVIDER"].choices == ("local", "cloud", "auto", "off")
+    assert by_key["STT_API_KEY"].secret is True
+    # Panel wiring: preset selects + STT save through /api/settings.
+    assert "AI_PRESETS" in webui.PAGE and "STT_PRESETS" in webui.PAGE
+    assert "setSttPreset" in webui.PAGE and "STT_PROVIDER" in webui.PAGE
+
+
+def test_get_settings_masks_stt_key(monkeypatch, tmp_path):
+    import config
+    cfg = config.Config(env_path=tmp_path / ".env")
+    monkeypatch.setattr(config_ui, "get_config", lambda: cfg)
+    cfg.set_runtime("STT_API_KEY", "sk-secret-123", persist=False)
+    httpd, port = _serve()
+    try:
+        status, body = _req(port, "GET", "/api/settings")
+        assert status == 200
+        payload = {s["key"]: s for s in json.loads(body)["settings"]}
+        val = str(payload["STT_API_KEY"]["value"])
+        assert "sk-secret-123" not in val      # masked, never leaks over GET
+    finally:
+        httpd.shutdown(); httpd.server_close()

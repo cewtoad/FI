@@ -292,7 +292,10 @@ class SpeechArbiter:
         audio = b""   # b"" = failed/unavailable; must ALWAYS be set or the head blocks
         try:
             if self.tts is not None and getattr(self.tts, "available", False):
-                audio = self.tts.synthesize(utt.text) or b""
+                # Normalize shorthand (1:31.204 -> 1分31秒204, P5 -> P五,
+                # 97C -> 97度...) only for the AUDIO; utt.text stays original.
+                from tts_text import normalize_for_tts
+                audio = self.tts.synthesize(normalize_for_tts(utt.text)) or b""
                 if self._fx is not None and audio:
                     try:
                         audio = self._fx(audio, getattr(self.tts, "mime", ""))

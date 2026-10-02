@@ -136,11 +136,30 @@ SCHEMA: Tuple[Setting, ...] = (
     Setting("PTT_MODE", "enum", "toggle", "voice", "PTT 模式", "hold=按住说话；toggle=按一下开始、再按一下结束",
             "PTT mode", "hold=push to talk; toggle=tap to start/stop",
             choices=("hold", "toggle")),
-    Setting("PTT_BINDING", "str", "kb:0x6B", "voice", "PTT 按键", "kb:0x6B（小键盘+）或 hid:VID:PID:byte:mask（手柄/外设）",
-            "PTT binding", "kb:<vk> or hid:VID:PID:byte:mask"),
+    Setting("PTT_BINDING", "str", "kb:0x6B", "voice", "PTT 按键", "kb:0x6B（小键盘+）或 hid:VID:PID:byte:mask（手柄，可在网页一键捕获；保存后重启语音模式生效）",
+            "PTT binding", "kb:<vk> or hid:VID:PID:byte:mask (gamepad; one-click capture in the web panel, restart voice mode after saving)"),
     Setting("PTT_DOUBLE_TAP_WINDOW_MS", "int", 400, "voice", "双击窗口（已停用）", "保留以兼容旧 .env；局内双击静音已取消（静音改到本页设置）",
             "Double-tap window (disabled)", "Kept for old .env; in-game double-tap quiet removed",
             min_value=100, max_value=1000),
+    Setting("STT_PROVIDER", "enum", "auto", "voice", "语音识别方式", "local=本地识别（离线免费）；cloud=云端 API；auto=填了 key 用云端、否则本地；off=关闭",
+            "STT provider", "local=offline; cloud=API; auto=key decides; off",
+            choices=("local", "cloud", "auto", "off")),
+    Setting("STT_LOCAL_ENGINE", "enum", "sensevoice", "voice", "本地识别引擎", "sensevoice=SenseVoice-Small（快 6-10 倍、中文更准，需下载模型）；whisper=faster-whisper；sensevoice 未安装时自动回退 whisper",
+            "Local STT engine", "sensevoice (fast, needs model download) or whisper; auto-falls back",
+            choices=("sensevoice", "whisper")),
+    Setting("STT_LOCAL_MODEL", "enum", "small", "voice", "本地识别模型", "越小越快：tiny 最快 / base 快且更准 / small 默认 / medium 慢（CPU）",
+            "Local STT model", "tiny/base/small/medium — smaller is faster on CPU",
+            choices=("tiny", "base", "small", "medium")),
+    Setting("STT_LOCAL_THREADS", "int", 2, "voice", "本地识别线程", "2-3 最稳；调太高会和游戏抢 CPU",
+            "Local STT threads", "2-3 recommended; too high starves the game",
+            min_value=1, max_value=8),
+    Setting("STT_API_KEY", "str", "", "voice", "识别 API 密钥", "云端识别用（如硅基流动）；本地识别不需要",
+            "STT API key", "for cloud STT (e.g. SiliconFlow); not needed for local",
+            secret=True),
+    Setting("STT_BASE_URL", "str", "", "voice", "识别接口地址", "OpenAI 兼容地址，如 https://api.siliconflow.cn/v1",
+            "STT base URL", "OpenAI-compatible, e.g. https://api.siliconflow.cn/v1"),
+    Setting("STT_MODEL", "str", "whisper-1", "voice", "识别模型名", "云端模型名：硅基流动填 SenseVoiceSmall，OpenAI 填 whisper-1",
+            "STT model", "SiliconFlow: SenseVoiceSmall; OpenAI: whisper-1"),
     Setting("TTS_RATE", "int", 0, "voice", "语速", "-10..10，0=正常；各 TTS 引擎自动换算",
             "Speech rate", "-10..10, 0=normal (auto-converted per engine)",
             min_value=-10, max_value=10),
@@ -170,13 +189,16 @@ def get_setting(key: str) -> Optional[Setting]:
     return SCHEMA_BY_KEY.get(key)
 
 
-# PTT_BINDING: kb:<vk> or hid:VID:PID:byte:mask — matches input_sources.
-# parse_binding semantics: VID/PID always hex (0x optional), byte/mask are
-# int(x, 0) (0x-prefixed hex or decimal).
+# PTT_BINDING: kb:<vk> | hid:VID:PID:byte:mask | hat:VID:PID:byte:value —
+# matches inputs.bindings.parse_binding semantics: VID/PID always hex (0x
+# optional), byte/mask/value are int(x, 0); hat value must be 0-7 (8=neutral
+# would mean "always pressed").
 _BINDING_RE = re.compile(
     r"^kb:(0x[0-9a-fA-F]+|\d+)$"
     r"|^hid:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}"
-    r":(0x[0-9a-fA-F]{1,2}|\d+):(0x[0-9a-fA-F]{1,2}|\d+)$")
+    r":(0x[0-9a-fA-F]{1,2}|\d+):(0x[0-9a-fA-F]{1,2}|\d+)$"
+    r"|^hat:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}"
+    r":(0x[0-9a-fA-F]{1,2}|\d+):[0-7]$")
 
 
 def validate(key: str, value: Any) -> Any:
@@ -230,7 +252,8 @@ def validate(key: str, value: Any) -> Any:
         text = str(value).strip()
         if not _BINDING_RE.match(text):
             raise ValueError(
-                f"{key}: expected kb:<vk> or hid:VID:PID:byte:mask, got {value!r}")
+                f"{key}: expected kb:<vk>, hid:VID:PID:byte:mask or "
+                f"hat:VID:PID:byte:value, got {value!r}")
         return text
     text = str(value)
     if "\n" in text or "\r" in text:

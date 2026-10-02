@@ -48,6 +48,7 @@ RUNTIME_MODULES = [
     "radio_templates.py",
     "names.py",
     "input_sources.py",
+    "tts_text.py",
     "ptt_controller.py",
     "debrief.py",
     "profiles.py",
@@ -83,13 +84,19 @@ HIDDEN_IMPORT_MODULES = [
     "radio_templates",
     "race_model",
     "input_sources",
+    "inputs",
+    "inputs.base",
+    "inputs.bindings",
+    "inputs.keyboard",
+    "inputs.hid",
     "ptt_controller",
     "debrief",
     "names",
 ]
 
-# Read-only resource directories shipped as-is.
-RESOURCE_DIRS = ["lib", "data"]
+# Read-only resource directories shipped as-is (inputs/ is the PTT source
+# package; the input_sources.py shim stays in RUNTIME_MODULES).
+RESOURCE_DIRS = ["lib", "data", "inputs"]
 
 # Modules excluded from the core PyInstaller build (kept out of the light pack).
 PYINSTALLER_EXCLUDES = ["tkinter", "matplotlib", "faster_whisper", "ctranslate2"]
