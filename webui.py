@@ -316,7 +316,7 @@ const I18N = {
     "board.h":"P 车手", "board.h2":"轮胎  落后", "board.lead":"领先",
     "bind.btn":"⌨ 一键捕获", "bind.wait":"先松开所有按键，然后按住想用的键再松开…",
     "bind.ok":"✓ 已识别：{b}", "bind.none":"没检测到按键（超时）。手柄需用 USB 连接且系统 Raw Input 能收到。",
-    "bind.dev_kb":"键盘", "bind.dev_hid":"手柄", "bind.restart":"（保存后重启语音模式生效）",
+    "bind.dev_kb":"键盘", "bind.dev_hid":"手柄(DualSense)", "bind.dev_xi":"Xbox手柄(XInput)", "bind.restart":"（保存后重启语音模式生效）",
     "ui.noanswer":""
   },
   en: {
@@ -359,7 +359,7 @@ const I18N = {
     "board.h":"P Driver", "board.h2":"Tyre  Gap", "board.lead":"leader",
     "bind.btn":"⌨ Capture key", "bind.wait":"Release everything, then press AND release the key to bind…",
     "bind.ok":"✓ Detected: {b}", "bind.none":"No key detected (timeout). Gamepad must be USB and reachable via Raw Input.",
-    "bind.dev_kb":"Keyboard", "bind.dev_hid":"Gamepad", "bind.restart":" (restart voice mode after saving)",
+    "bind.dev_kb":"Keyboard", "bind.dev_hid":"Gamepad (DualSense)", "bind.dev_xi":"Xbox (XInput)", "bind.restart":" (restart voice mode after saving)",
     "ui.noanswer":""
   }
 };
@@ -417,6 +417,7 @@ function fillPresetSelects(){
     ["qwen","ai.preset_qwen"],["ollama","ai.preset_ollama"],["custom","ai.preset_custom"]]);
   build("setSttPreset", [["none","ai.stt_none"],["siliconflow","ai.stt_sf"],
     ["openai","ai.stt_oai"],["custom","ai.stt_custom"]]);
+  build("bindDev", [["kb","bind.dev_kb"],["hid","bind.dev_hid"],["xi","bind.dev_xi"]]);
 }
 (function initPresets(){
   const ai = document.getElementById("setPreset");
@@ -659,10 +660,7 @@ async function loadFeatures(){
           input = `<input id="${id}" value="${s.value}">`;
         }
         const bindCtl = (s.key === "PTT_BINDING")
-          ? `<select id="bindDev" style="margin-right:6px;padding:6px 8px;">
-               <option value="kb">${t('bind.dev_kb')}</option>
-               <option value="hid">${t('bind.dev_hid')}</option>
-             </select>`
+          ? `<select id="bindDev" style="margin-right:6px;padding:6px 8px;"></select>`
           + `<button type="button" id="bindBtn" style="padding:6px 10px;">${t('bind.btn')}</button>`
           + `<span id="bindingName" style="margin-left:8px;font-size:12px;color:var(--accent);"></span>` : "";
         html += `<div class="row2" style="align-items:center;margin:4px 0;">`
@@ -690,8 +688,10 @@ async function loadFeatures(){
     // Pre-select the capture device to match the current binding.
     const bd = document.getElementById("bindDev");
     if (bd){
+      fillPresetSelects();
       const cur = String((featSchema.find(x => x.key === "PTT_BINDING") || {}).value || "");
-      bd.value = (cur.startsWith("hid:") || cur.startsWith("hat:")) ? "hid" : "kb";
+      bd.value = cur.startsWith("xi:") ? "xi"
+               : (cur.startsWith("hid:") || cur.startsWith("hat:")) ? "hid" : "kb";
     }
     // Show what the bound key actually IS (= 手柄 R1 / = 键盘 小键盘+).
     const bel = document.getElementById("f_PTT_BINDING");
@@ -1229,6 +1229,9 @@ class _Handler(BaseHTTPRequestHandler):
             if device == "hid":
                 from input_sources import capture_hid_binding
                 got = capture_hid_binding(timeout_s=timeout)
+            elif device in ("xinput", "xi"):
+                from input_sources import capture_xinput_binding
+                got = capture_xinput_binding(timeout_s=timeout)
             else:
                 from input_sources import capture_keyboard_binding
                 got = capture_keyboard_binding(timeout_s=timeout)

@@ -189,16 +189,18 @@ def get_setting(key: str) -> Optional[Setting]:
     return SCHEMA_BY_KEY.get(key)
 
 
-# PTT_BINDING: kb:<vk> | hid:VID:PID:byte:mask | hat:VID:PID:byte:value —
-# matches inputs.bindings.parse_binding semantics: VID/PID always hex (0x
-# optional), byte/mask/value are int(x, 0); hat value must be 0-7 (8=neutral
-# would mean "always pressed").
+# PTT_BINDING: kb:<vk> | hid:VID:PID:byte:mask | hat:VID:PID:byte:value |
+# xi:<button> — matches inputs.bindings.parse_binding semantics: VID/PID
+# always hex (0x optional), byte/mask/value are int(x, 0); hat value must be
+# 0-7 (8=neutral would mean "always pressed"); xi button names are the
+# XInput buttons (a/b/x/y/lb/rb/lt/rt/start/back/ls/rs/dup/ddown/dleft/dright).
 _BINDING_RE = re.compile(
     r"^kb:(0x[0-9a-fA-F]+|\d+)$"
     r"|^hid:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}"
     r":(0x[0-9a-fA-F]{1,2}|\d+):(0x[0-9a-fA-F]{1,2}|\d+)$"
     r"|^hat:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}"
-    r":(0x[0-9a-fA-F]{1,2}|\d+):[0-7]$")
+    r":(0x[0-9a-fA-F]{1,2}|\d+):[0-7]$"
+    r"|^xi:(a|b|x|y|lb|rb|lt|rt|start|back|ls|rs|dup|ddown|dleft|dright)$")
 
 
 def validate(key: str, value: Any) -> Any:
@@ -252,8 +254,8 @@ def validate(key: str, value: Any) -> Any:
         text = str(value).strip()
         if not _BINDING_RE.match(text):
             raise ValueError(
-                f"{key}: expected kb:<vk>, hid:VID:PID:byte:mask or "
-                f"hat:VID:PID:byte:value, got {value!r}")
+                f"{key}: expected kb:<vk>, hid:VID:PID:byte:mask, "
+                f"hat:VID:PID:byte:value or xi:<button>, got {value!r}")
         return text
     text = str(value)
     if "\n" in text or "\r" in text:

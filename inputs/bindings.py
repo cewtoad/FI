@@ -1,4 +1,4 @@
-"""PTT binding strings: parse/format for kb/hid/hat bindings (pure).
+"""PTT binding strings: parse/format for kb/hid/hat/xi bindings (pure).
 
 Binding formats:
     kb:<vk>                        keyboard virtual-key, e.g. kb:0x6B
@@ -9,11 +9,17 @@ Binding formats:
                                    Hats are value-coded (neutral 0x08 has bits
                                    set, North clears all), so a direction
                                    cannot be expressed as a bit mask.
+    xi:<button>                    an Xbox controller button through the
+                                   XInput API, e.g. xi:a, xi:rb, xi:dup,
+                                   xi:lt (trigger as >=25% threshold).
 """
 
 from __future__ import annotations
 
 from typing import Optional
+
+XI_BUTTONS = ("a", "b", "x", "y", "lb", "rb", "lt", "rt",
+              "start", "back", "ls", "rs", "dup", "ddown", "dleft", "dright")
 
 
 def parse_binding(binding: str) -> Optional[dict]:
@@ -33,6 +39,11 @@ def parse_binding(binding: str) -> Optional[dict]:
                 return None
             return {"type": "hat", "vid": int(parts[1], 16), "pid": int(parts[2], 16),
                     "byte": int(parts[3], 0), "value": value}
+        if parts[0] == "xi" and len(parts) == 2:
+            button = parts[1].strip().lower()
+            if button not in XI_BUTTONS:
+                return None
+            return {"type": "xi", "button": button}
     except (ValueError, IndexError):
         return None
     return None
@@ -46,6 +57,8 @@ def format_binding(desc) -> str:
     if desc["type"] == "hat":
         return (f"hat:{desc['vid']:04X}:{desc['pid']:04X}:"
                 f"{desc['byte']}:{desc['value']}")
+    if desc["type"] == "xi":
+        return f"xi:{desc['button']}"
     return (f"hid:{desc['vid']:04X}:{desc['pid']:04X}:"
             f"{desc['byte']}:0x{desc['mask']:X}")
 
@@ -78,6 +91,16 @@ _VK_SPECIAL = {
 }
 
 _DUALSENSE = (0x054C, 0x0CE6)
+_XI_NAMES = {  # XInput button -> (zh, en)
+    "a": ("A 键", "A"), "b": ("B 键", "B"), "x": ("X 键", "X"), "y": ("Y 键", "Y"),
+    "lb": ("LB 左肩键", "LB"), "rb": ("RB 右肩键", "RB"),
+    "lt": ("LT 左扳机", "LT"), "rt": ("RT 右扳机", "RT"),
+    "start": ("Start/Menu", "Start/Menu"), "back": ("Back/View", "Back/View"),
+    "ls": ("LS（左摇杆按下）", "LS (stick click)"),
+    "rs": ("RS（右摇杆按下）", "RS (stick click)"),
+    "dup": ("十字键 上", "D-pad Up"), "ddown": ("十字键 下", "D-pad Down"),
+    "dleft": ("十字键 左", "D-pad Left"), "dright": ("十字键 右", "D-pad Right"),
+}
 _DUALSENSE_BITS = {  # (byte, mask) -> (zh, en); DualSense USB layout
     (8, 0x10): ("□ 方块", "Square"), (8, 0x20): ("✕ 叉", "Cross"),
     (8, 0x40): ("○ 圈", "Circle"), (8, 0x80): ("△ 三角", "Triangle"),
@@ -120,10 +143,15 @@ def describe_binding(binding: str, lang: str = "zh") -> str:
     if desc["type"] == "kb":
         return f"键盘 {_vk_name(desc['vk'], lang)}" if zh \
             else f"Keyboard {_vk_name(desc['vk'], lang)}"
-    if desc.get("vid") == 0x045E:
+    if desc["type"] == "xi" or desc.get("vid") == 0x045E:
         pad = "Xbox 手柄" if zh else "Xbox controller"
     else:
         pad = "手柄" if zh else "Gamepad"
+    if desc["type"] == "xi":
+        nm = _XI_NAMES.get(desc["button"])
+        if nm:
+            return f"{pad} {nm[0] if zh else nm[1]}"
+        return f"{pad} xi:{desc['button']}"
     if (desc.get("vid"), desc.get("pid")) == _DUALSENSE:
         if desc["type"] == "hat":
             d = _DUALSENSE_HAT.get(desc.get("value"))

@@ -12,8 +12,10 @@ from inputs import (  # noqa: F401
     HidSource,
     InputSource,
     KeyboardSource,
+    XInputSource,
     capture_hid_binding,
     capture_keyboard_binding,
+    capture_xinput_binding,
     describe_binding,
     format_binding,
     hid_button_pressed,
@@ -23,8 +25,8 @@ from inputs import (  # noqa: F401
 )
 
 __all__ = [
-    "InputSource", "KeyboardSource", "HidSource", "CaptureScan",
+    "InputSource", "KeyboardSource", "HidSource", "XInputSource", "CaptureScan",
     "parse_binding", "format_binding", "describe_binding", "hid_button_pressed",
     "vid_pid_from_path", "capture_keyboard_binding", "capture_hid_binding",
-    "make_source",
+    "capture_xinput_binding", "make_source",
 ]

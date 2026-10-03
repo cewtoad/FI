@@ -15,18 +15,19 @@ import logging
 from typing import Optional
 
 from inputs.base import InputSource
-from inputs.bindings import (describe_binding, format_binding, parse_binding)
+from inputs.bindings import XI_BUTTONS, describe_binding, format_binding, parse_binding
 from inputs.hid import (CaptureScan, HidSource, capture_hid_binding,
                         hid_button_pressed, vid_pid_from_path)
 from inputs.keyboard import KeyboardSource, capture_keyboard_binding
+from inputs.xinput import XInputSource, capture_xinput_binding
 
 _log = logging.getLogger("f1_tr.input")
 
 __all__ = [
-    "InputSource", "KeyboardSource", "HidSource", "CaptureScan",
-    "parse_binding", "format_binding", "describe_binding", "hid_button_pressed",
-    "vid_pid_from_path", "capture_keyboard_binding", "capture_hid_binding",
-    "make_source",
+    "InputSource", "KeyboardSource", "HidSource", "XInputSource", "CaptureScan",
+    "XI_BUTTONS", "parse_binding", "format_binding", "describe_binding",
+    "hid_button_pressed", "vid_pid_from_path", "capture_keyboard_binding",
+    "capture_hid_binding", "capture_xinput_binding", "make_source",
 ]
 
 
@@ -43,6 +44,11 @@ def make_source(binding: str, on_press=None, on_release=None, on_tap=None,
         return None
     if desc["type"] == "kb":
         return KeyboardSource(desc["vk"], on_press, on_release, on_tap)
+    if desc["type"] == "xi":
+        if not enable_hid:
+            _log.info("XInput binding present but disabled (enable_hid=False)")
+            return None
+        return XInputSource(desc, on_press, on_release, on_tap)
     if desc["type"] in ("hid", "hat"):
         if not enable_hid:
             _log.info("HID binding present but disabled (enable_hid=False)")
