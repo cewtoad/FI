@@ -1143,8 +1143,12 @@ class TelemetryState:
         self.leaderboard = rows
 
         # Detect the player's position change -> an event the AI can report.
+        # While a flashback rollback is pending, the lap data behind this
+        # rebuild is still PRE-rewind: diffing it (or latching its position as
+        # the new baseline) would fire a fake "dropped N places" event once the
+        # rewound LAP_DATA arrives. Stay silent until the rollback has run.
         player_row = next((r for r in rows if r["is_player"]), None)
-        if player_row:
+        if player_row and not self._pending_flashback:
             new_pos = player_row["position"]
             if self._last_position is not None and new_pos != self._last_position:
                 self._maybe_record_position_event(self._last_position, new_pos, rows)

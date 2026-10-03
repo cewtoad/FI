@@ -224,14 +224,16 @@ def _route_weather(facts, q):
 
 # Ordered intent table: (regex, handler, label). First match wins.
 _ROUTES: List[tuple] = [
+    # "还剩几圈" must be tested before the broad car-ahead ("前面") and
+    # generic lap-count patterns: "前面还剩多少圈" is a laps question, not
+    # "who is ahead" (it was previously answered as the car-ahead fact).
+    (re.compile(r"还剩几圈|还剩多少圈|还有几圈|剩几圈|剩余圈数"),
+     _route_laps_remaining, "laps_remaining"),
     (re.compile(r"前车|前面|前方|追逐"), _route_car_ahead, "car_ahead"),
     (re.compile(r"落后.*领先|距.*领先|距领先|差.*头车|离.*头车"), _route_gap_leader, "gap_leader"),
     (re.compile(r"距.*前车|差.*前车|和前车"), _route_gap_ahead, "gap_ahead"),
     (re.compile(r"最快圈|最好.*圈|best"), _route_best_lap, "best_lap"),
     (re.compile(r"上[一]?圈|上一圈速度"), _route_last_lap, "last_lap"),
-    # "还剩几圈" must be tested before the generic lap-count route.
-    (re.compile(r"还剩几圈|还剩多少圈|还有几圈|剩几圈|剩余圈数"),
-     _route_laps_remaining, "laps_remaining"),
     (re.compile(r"第几圈|圈数"), _route_lap, "lap"),
     (re.compile(r"我.*p几|我.*第几|什么名次|排名|位置"), _route_position, "position"),
     (re.compile(r"油|燃油|油耗"), _route_fuel, "fuel"),
@@ -279,7 +281,9 @@ class LocalRouter:
     def _try_rival_pace(q, leaderboard, name_renderer) -> Optional[FastAnswer]:
         if not leaderboard or name_renderer is None:
             return None
-        if not any(k in q for k in ("圈速", "配速", "速度", "多少", "单圈")):
+        # Pace intent only: a bare "多少" used to pull any question that merely
+        # mentioned a driver name (e.g. "汉密尔顿还剩多少圈") into rival-pace.
+        if not any(k in q for k in ("圈速", "配速", "速度", "单圈", "多快")):
             return None
         # 1) direct match on the leaderboard driver string
         for row in leaderboard:

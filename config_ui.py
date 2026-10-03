@@ -74,6 +74,19 @@ def _groups_payload() -> Dict[str, Dict[str, str]]:
             for k, v in config_schema.GROUP_LABELS.items()}
 
 
+def _audio_payload() -> Dict[str, Any]:
+    """Device lists for the mic/speaker pickers (empty when audio is absent)."""
+    try:
+        import audio
+        return {"input": audio.list_devices("input"),
+                "output": audio.list_devices("output"),
+                "current": audio.current(),
+                "active": audio.describe()["active"]}
+    except Exception as e:  # noqa: BLE001 - a broken audio stack must not kill the page
+        return {"input": [], "output": [], "current": {}, "active": {},
+                "error": str(e)}
+
+
 def _page() -> str:
     return """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>F1 Race Engineer 设置</title><style>
@@ -106,11 +119,15 @@ const T = {
   zh:{tip:'保存后写入 .env；运行中的进程会自动热加载。', save:'保存', saved:'已保存',
       partial:'部分失败: ', restart:' · 需重启', on:'开', off:'关',
       auto:'（自动）', bind:'⌨ 按键绑定', bindWait:'请按一下要绑定的键…',
-      bindOk:'✓ 已识别：', bindNone:'没检测到按键（超时）'},
+      bindOk:'✓ 已识别：', bindNone:'没检测到按键（超时）',
+      follow:'跟随系统当前设备', rescan:'🔄 重新检测', missing:'（未检测到）',
+      sysdefault:'系统默认'},
   en:{tip:'Saved to .env; the running app hot-reloads it.', save:'Save', saved:'Saved',
       partial:'Some failed: ', restart:' · restart', on:'On', off:'Off',
       auto:'(auto)', bind:'⌨ Bind key', bindWait:'Press the key to bind…',
-      bindOk:'✓ Detected: ', bindNone:'No key detected (timeout)'}
+      bindOk:'✓ Detected: ', bindNone:'No key detected (timeout)',
+      follow:'Follow system default', rescan:'🔄 Re-scan', missing:' (not found)',
+      sysdefault:'system default'}
 };
 function t(k){ return (T[LANG]||T.zh)[k]; }
 function pick(obj, base){ return LANG==='en' ? (obj[base+'_en']||obj[base]) : (obj[base]||obj[base+'_en']); }
@@ -132,6 +149,9 @@ async function load(){
         input=`<select id="${id}"><option value="1">${t('on')}</option><option value="0">${t('off')}</option></select>`;
       }else if(s.type==='enum'){
         input=`<select id="${id}">`+s.choices.map(c=>`<option>${c}</option>`).join('')+`</select>`;
+      }else if(s.key==='AUDIO_INPUT'||s.key==='AUDIO_OUTPUT'){
+        input=`<select id="${id}" style="flex:1"><option value="">${t('follow')}</option></select>`
+            +`<button type="button" class="audBtn" style="margin-top:0;margin-left:6px;">${t('rescan')}</button>`;
       }else{
         input=`<input id="${id}" value="${s.value==null?'':s.value}">`;
       }
@@ -148,6 +168,7 @@ async function load(){
     if(s.type==='bool'){ const v=String(s.value).toLowerCase();
       el.value=(v==='1'||v==='true'||v==='on')?'1':'0'; }
     else if(s.choices_from==='voices'){ await fillVoices(el, s.value); }
+    else if(s.key==='AUDIO_INPUT'||s.key==='AUDIO_OUTPUT'){ /* filled by loadAudio() */ }
     else el.value=s.value==null?'':s.value;
   }
   // tooltips: hover anywhere on a row
@@ -157,6 +178,8 @@ async function load(){
     if(holder && help) holder.setAttribute('data-help', help);
   }
   document.querySelectorAll('.bindBtn').forEach(b=>{ b.onclick=()=>startBind(b.getAttribute('data-for')); });
+  document.querySelectorAll('.audBtn').forEach(b=>{ b.onclick=async()=>{ await loadAudio(); }; });
+  await loadAudio();
   document.getElementById('tipLine').textContent=t('tip');
   document.getElementById('saveBtn').textContent=t('save');
 }
@@ -164,6 +187,23 @@ async function fillVoices(sel, cur){
   if(!voices){ try{ const r=await fetch('/api/voices'); voices=(await r.json()).voices||[]; }catch(e){ voices=[]; } }
   for(const v of voices){ const o=document.createElement('option'); o.value=v.id; o.textContent=v.label||v.id; sel.appendChild(o); }
   if(cur) sel.value=cur;
+}
+async function loadAudio(){
+  let d;
+  try{ const r=await fetch('/api/audio'); d=await r.json(); }catch(e){ return; }
+  const fill=(sel, list, cur)=>{
+    if(!sel) return;
+    sel.innerHTML=`<option value="">${t('follow')}</option>`;
+    let found=false;
+    for(const dev of (list||[])){ const o=document.createElement('option'); o.value=dev.name;
+      o.textContent=dev.name+(dev.default?(' ('+t('sysdefault')+')'):'');
+      if(cur&&dev.name===cur){ o.selected=true; found=true; } sel.appendChild(o); }
+    // Unplugged pin stays visible/kept, never silently shown as "follow".
+    if(cur&&!found){ const o=document.createElement('option'); o.value=cur;
+      o.textContent=cur+t('missing'); o.selected=true; sel.appendChild(o); }
+  };
+  fill(document.getElementById('f_AUDIO_INPUT'), d.input, (d.current||{}).input);
+  fill(document.getElementById('f_AUDIO_OUTPUT'), d.output, (d.current||{}).output);
 }
 async function startBind(inputId){
   const m=document.getElementById('msg'); m.className='msg'; m.textContent=t('bindWait');
@@ -241,6 +281,8 @@ class _Handler(BaseHTTPRequestHandler):
                              "port": get_config().get_int("CONFIG_UI_PORT", DEFAULT_PORT)})
         elif path == "/api/voices":
             self._json(200, {"voices": _voices()})
+        elif path == "/api/audio":
+            self._json(200, _audio_payload())
         elif path == "/api/settings":
             self._json(200, {"settings": _settings_payload()})
         else:

@@ -144,14 +144,15 @@ Xbox（VID 045E）走微软 XInput 驱动栈，Raw Input 同样以 usage 0x01/0x
 
 ## 7. 本轮未动 / 待办
 
-- **第三轮整体审查（2026-10-02，只读）结论尚未修复**——待修清单（均已核实到 file:line）：
-  - P0：profiles.py:227/282 快答路由误命中（"前面还剩多少圈"被前车路由截胡、
+- **第三轮整体审查（2026-10-02，只读）**：P0×4 + P1×2 已于 2026-10-03 修复
+  （见 §9）；以下为当时的原始清单（均已核实到 file:line）：
+  - P0（✅ 已修）：profiles.py:227/282 快答路由误命中（"前面还剩多少圈"被前车路由截胡、
     rival 路由"多少"触发词过宽）；voice_main.py:202 云 STT 签名不兼容（配 key 必现识别失败）；
     webui.py:914 Origin 白名单只认 127.0.0.1（LAN 绑定 POST 全 403）；
     webui.py:923 /api/profile 绕过 local-only 且 persist。
-  - P1：race_model.py:290 PitWindow 闩锁跨会话残留（S4 修复第二场复发）；
+  - P1（✅ 已修）：race_model.py:290 PitWindow 闩锁跨会话残留（S4 修复第二场复发）；
     state.py:1151 flashback 位置基线被 CarStatus 重建污染（S2 修复未闭合）。
-  - P2：RADIO_GAP_MODE=on_change 未实现、RADIO_PER_LAP_CAP 无消费点、
+  - P2（仍未修）：RADIO_GAP_MODE=on_change 未实现、RADIO_PER_LAP_CAP 无消费点、
     profiles.py:139 缺油阈值硬编码、dedup 作用域审计、语音栈竞态（_busy 提前释放/
     Piper 无超时/Whisper 双重加载——SenseVoice 的 load 已带锁）、0 秒圈样本进配速回归等。
   - 方向性建议：跨会话/flashback 统一 reset 协议；快答路由改打分制；
@@ -164,8 +165,50 @@ Xbox（VID 045E）走微软 XInput 驱动栈，Raw Input 同样以 usage 0x01/0x
 
 ```powershell
 cd "G:\AI WORK\F1_TR"
-py -3.12 -m pytest -q                          # 258 collected, exit 0
+py -3.12 -m pytest -q                          # 281 collected, exit 0
 py -3.12 -m tools.download_sensevoice          # 下载模型（首次）
 py -3.12 voice_main.py                         # 语音模式：手柄 R1 PTT + SenseVoice 识别
 py -3.12 run.py --web                          # 网页面板：AI/STT 预设 + 功能设置
 ```
+
+## 9. 第三轮审查 P0/P1 修复（2026-10-03）
+
+第三轮审查（2026-10-02）的 P0×4 + P1×2 全部修复；新增回归测试
+`tests/test_review3_fixes.py`（9 条密闭），全套 281 collected / exit 0。
+
+- **P0 快答路由误命中**（profiles.py）：`laps_remaining` 提到路由表首位——
+  "前面还剩多少圈"不再被 car_ahead 的宽触发词"前面"截胡；`_try_rival_pace`
+  触发词去掉裸"多少"（补"多快"）——"汉密尔顿还剩多少圈"不再被劫持成对手配速。
+  遗留方向（未做）：整表改打分制。
+- **P0 云 STT 必现失败**（stt_client.py）：`CloudSTT.transcribe` 的 mime 改默认参，
+  并在收到裸 float32 PCM（voice_main 路径）时用新增 `pcm_to_wav_bytes` 自动包成
+  16 位 WAV 再上传——修掉 `transcribe(pcm)` 单参调用 TypeError（配了 key 必挂）。
+- **P0 Origin 白名单**（webui.py）：`_origin_ok` 从固定 127.0.0.1/localhost 名单
+  改为 **Origin 与请求 Host 同源比对**——`--bind-ip 0.0.0.0` 时 LAN 浏览器
+  POST（提问/设置/捕获）不再全 403；跨站 Origin / "null" 仍 403。
+- **P0 /api/profile**（webui.py）：加入 `_local_only` 名单（原可被 LAN 改写并写 .env）。
+- **P1 PitWindow 闩锁跨会话**（race_model.py）：RaceModel 跟踪 `session_uid`，
+  换场即重臂 `_pit_window_id/_pit_window_stop0`——第二场（相同 ideal/latest 圈号）
+  不再把窗口误判成 done / 不重臂。
+- **P1 flashback 位置基线**（state.py）：`_pending_flashback` 期间冻结位置基线的
+  差分与更新（CAR_STATUS 重建不再回填回滚前位置）；回滚后自然重臂，不再误报
+  "下降 N 位"事件，真实位置变化照常检测。
+
+### 音频设备下拉（2026-10-03，用户反馈）
+
+【功能设置】里 AUDIO_INPUT/AUDIO_OUTPUT 原是纯文本框 → 改成与 PTT 行同一设计
+思路：**检测到的设备下拉**（含"跟随系统当前设备"+ 系统默认标注）+ 🔄 重新检测
++ **选中即保存**（POST /api/audio，写 .env，与手做的那组 picker 同步刷新）；
+当前固定的设备若未插拔，下拉里保留"（未检测到）"选项而不是伪装成"跟随系统"；
+批量"保存开关"跳过音频项，避免用显示值覆盖真实 pin。完整设置页（config_ui）
+同步：新增 GET /api/audio + 麦克风/播报输出下拉 + 重新检测按钮。
+测试：`tests/test_ui_audio_picker.py` 6 条；两个页面 `<script>` 过 node --check。
+
+### v0.5.1 全量包（2026-10-03 重建，供 Xbox 真机测试）
+
+`APP_VERSION`/`version_info.txt` 升 0.5.1；`build_release.ps1 -Version 0.5.1
+-FullOnly` 本地构建 `dist/F1Engineer-full-0.5.1-win64.zip`（1396.6MB / 6487 文件 /
+SHA256 BD93041F…8232），已校验含 `inputs/xinput.py`、音频设备下拉、SenseVoice
+模型、sherpa-onnx、全部启动器，无 `.env`/`__pycache__`/`sessions`。含 §9 全部
+修复 + Xbox XInput（f174980）——在其他电脑上按"网页模式 → 功能设置 → 设备选
+Xbox(XInput) → 一键捕获 → 按 A → xi:a → 重启语音模式"实测 PTT 触发。

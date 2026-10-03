@@ -76,7 +76,7 @@ class STTEngine:
     def available(self) -> bool:
         raise NotImplementedError
 
-    def transcribe(self, audio: bytes, mime: str) -> str:
+    def transcribe(self, audio, mime: str = "") -> str:
         """Return the transcript for an audio blob ("" when nothing was said)."""
         raise NotImplementedError
 
@@ -98,9 +98,15 @@ class CloudSTT(STTEngine):
     def available(self) -> bool:
         return bool(self.api_key) and bool(self.base_url)
 
-    def transcribe(self, audio: bytes, mime: str) -> str:
+    def transcribe(self, audio, mime: str = "") -> str:
+        """Raw mono float32 PCM (voice path) or encoded bytes (browser path)."""
         if not self.available:
             raise RuntimeError("STT not configured (STT_API_KEY / STT_BASE_URL)")
+        if not isinstance(audio, (bytes, bytearray)):
+            # Voice mode hands us raw PCM; the HTTP API wants an encoded file,
+            # so wrap it as 16-bit WAV before building the multipart body.
+            audio = pcm_to_wav_bytes(audio)
+            mime = "audio/wav"
         mime = (mime or "audio/webm").split(";")[0].strip() or "audio/webm"
         suffix = _MIME_SUFFIX.get(mime, ".bin")
         body, ctype = build_multipart(
@@ -274,6 +280,26 @@ class LocalSenseVoiceSTT(STTEngine):
 def _strip_asr_tags(text: str) -> str:
     """SenseVoice rich output carries <|zh|><|NEUTRAL|><|Speech|>-style tags."""
     return re.sub(r"<\|[^|>]*\|>", "", text)
+
+
+def pcm_to_wav_bytes(samples, rate: int = 16000) -> bytes:
+    """Mono float32 samples (-1..1; list / array / numpy) -> 16-bit PCM WAV.
+
+    CloudSTT uploads an encoded file, so the voice path's raw PCM must be
+    wrapped before it reaches the HTTP layer. Values are clamped, so a hot
+    signal cannot wrap around.
+    """
+    pcm = array.array("h", (
+        max(-32768, min(32767, int(float(s) * 32767.0))) for s in samples))
+    if sys.byteorder == "big":
+        pcm.byteswap()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
 
 
 def _wav_bytes_to_f32(data: bytes) -> List[float]:

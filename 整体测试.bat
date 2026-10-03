@@ -3,15 +3,18 @@ chcp 65001 >nul
 title F1 Race Engineer - Self Test
 cd /d "%~dp0"
 
-set "PY="
-if exist "%~dp0python.exe" set "PY=%~dp0python.exe"
-if not defined PY (
-    where py >nul 2>nul && set "PY=py -3.12"
-)
-if not defined PY (
+rem NOTE: the embedded full path is NEVER stored in PY and never expanded
+rem inside a block - a pack path like "D:older (3)\" would inject an
+rem unquoted ")" at block parse time and kill the script. PY only ever holds
+rem a bare launcher name ("py -3.12" / "python"); the embedded runtime is
+rem launched as the quoted "%~dp0python.exe" at each call site.
+set "EMBEDDED="
+if exist "%~dp0python.exe" set "EMBEDDED=1"
+where py >nul 2>nul && set "PY=py -3.12"
+if not defined PY if not defined EMBEDDED (
     where python >nul 2>nul && set "PY=python"
 )
-if not defined PY (
+if not defined PY if not defined EMBEDDED (
     echo [!] Python not found. Use the full package, or install Python 3.12.
     pause
     exit /b 1
@@ -53,7 +56,8 @@ goto menu
 
 :self
 cls
-%PY% tool_selftest.py
+if defined EMBEDDED ( "%~dp0python.exe" tool_selftest.py 
+) else ( %PY% tool_selftest.py )
 echo.
 pause
 goto menu
@@ -63,7 +67,8 @@ cls
 echo   Web mode: browser opens http://127.0.0.1:8765
 echo   Close this window (or Ctrl+C) to stop.
 echo.
-%PY% FI.py --web
+if defined EMBEDDED ( "%~dp0python.exe" FI.py --web 
+) else ( %PY% FI.py --web )
 echo.
 pause
 goto menu
@@ -72,7 +77,8 @@ goto menu
 cls
 echo   Voice mode: in game press NUMPAD + to talk, again to stop. Ctrl+C to quit.
 echo.
-%PY% voice_main.py
+if defined EMBEDDED ( "%~dp0python.exe" voice_main.py 
+) else ( %PY% voice_main.py )
 echo.
 pause
 goto menu
@@ -81,21 +87,24 @@ goto menu
 cls
 echo   Console panel: live data (Ctrl+C to quit).
 echo.
-%PY% run.py
+if defined EMBEDDED ( "%~dp0python.exe" run.py 
+) else ( %PY% run.py )
 echo.
 pause
 goto menu
 
 :dev
 cls
-%PY% tool_audio.py show
+if defined EMBEDDED ( "%~dp0python.exe" tool_audio.py show 
+) else ( %PY% tool_audio.py show )
 echo.
 pause
 goto menu
 
 :speak
 cls
-%PY% tool_audio.py speak
+if defined EMBEDDED ( "%~dp0python.exe" tool_audio.py speak 
+) else ( %PY% tool_audio.py speak )
 echo.
 pause
 goto menu
@@ -123,7 +132,8 @@ goto menu
 cls
 echo   Running unit tests (offline)...
 echo.
-%PY% -m pytest -q
+if defined EMBEDDED ( "%~dp0python.exe" -m pytest -q 
+) else ( %PY% -m pytest -q )
 echo.
 pause
 goto menu
@@ -133,7 +143,8 @@ cls
 echo   Running ALL tests (loopback UDP + audio)...
 echo.
 set "RUN_NETWORK_TESTS=1"
-%PY% -m pytest -q
+if defined EMBEDDED ( "%~dp0python.exe" -m pytest -q 
+) else ( %PY% -m pytest -q )
 set "RUN_NETWORK_TESTS="
 echo.
 pause

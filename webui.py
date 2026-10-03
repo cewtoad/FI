@@ -17,6 +17,7 @@ import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 import audio
 from app import build_app
@@ -37,7 +38,7 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 _RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
 _version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
@@ -304,7 +305,7 @@ const I18N = {
     "audio.mic":"麦克风", "audio.spk":"播报输出", "audio.refresh":"🔄 重新检测设备",
     "audio.note":"默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效（也可在此固定）。",
     "audio.now":"当前使用：", "audio.follow":"跟随系统当前设备", "audio.cur":"（当前: {n}）",
-    "audio.sysdefault":"（系统默认）", "audio.none":"无",
+    "audio.sysdefault":"（系统默认）", "audio.none":"无", "audio.missing":"（未检测到）",
     "udp.title":"游戏内 UDP 遥测怎么设？",
     "udp.body":"游戏 <b>设置 → UDP 遥测</b>：<br>• UDP 遥测：<code>开启</code><br>• UDP IP：<code>127.0.0.1</code>　• UDP 端口：<code>20777</code><br>• UDP 赛制：<code>2026</code>（或与你游戏版本一致）<br>• <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。",
     "panel.telemetry":"遥测面板", "panel.board":"全场排名", "panel.radio":"车队无线电",
@@ -347,7 +348,7 @@ const I18N = {
     "audio.mic":"Microphone", "audio.spk":"Speaker", "audio.refresh":"🔄 Re-scan devices",
     "audio.note":"By default the current system device is used — plugging/switching the default takes effect on the next voice take (you can also pin one here).",
     "audio.now":"In use: ", "audio.follow":"Follow system default", "audio.cur":" (current: {n})",
-    "audio.sysdefault":" (system default)", "audio.none":"none",
+    "audio.sysdefault":" (system default)", "audio.none":"none", "audio.missing":" (not found)",
     "udp.title":"How to enable in-game UDP telemetry",
     "udp.body":"Game <b>Settings → UDP Telemetry</b>:<br>• UDP Telemetry: <code>On</code><br>• UDP IP: <code>127.0.0.1</code>　• UDP Port: <code>20777</code><br>• UDP Format: <code>2026</code> (match your game)<br>• Keep <b>“Your Telemetry” = <code>Restricted</code></b> — changing it may break reception; restart the game.",
     "panel.telemetry":"Telemetry", "panel.board":"Leaderboard", "panel.radio":"Team radio",
@@ -654,6 +655,9 @@ async function loadFeatures(){
           input = `<select id="${id}">` + s.choices.map(c=>`<option>${c}</option>`).join("") + `</select>`;
         } else if (s.type === "int" || s.type === "float"){
           input = `<input id="${id}" type="number" step="${s.type==="float"?"0.1":"1"}" value="${s.value}">`;
+        } else if (s.key === "AUDIO_INPUT" || s.key === "AUDIO_OUTPUT"){
+          // Detected-device dropdown (filled by loadAudio), like the PTT row.
+          input = `<select id="${id}"><option value="">${t('audio.follow')}</option></select>`;
         } else if (s.secret){
           input = `<input id="${id}" type="password" placeholder="${LANG==='en'?'(hidden; leave blank)':'（已隐藏，留空不改）'}" style="width:100%">`;
         } else {
@@ -663,9 +667,11 @@ async function loadFeatures(){
           ? `<select id="bindDev" style="margin-right:6px;padding:6px 8px;"></select>`
           + `<button type="button" id="bindBtn" style="padding:6px 10px;">${t('bind.btn')}</button>`
           + `<span id="bindingName" style="margin-left:8px;font-size:12px;color:var(--accent);"></span>` : "";
+        const audCtl = (s.key === "AUDIO_INPUT" || s.key === "AUDIO_OUTPUT")
+          ? `<button type="button" class="audRescanBtn" title="${t('audio.refresh')}" style="margin-left:6px;padding:6px 10px;">🔄</button>` : "";
         html += `<div class="row2" style="align-items:center;margin:4px 0;">`
               + `<label style="flex:0 0 210px;font-size:12px;color:var(--dim);">${pick(s,"label")||s.key}</label>`
-              + `<span style="flex:1;display:flex;align-items:center;">${input}${bindCtl}</span></div>`;
+              + `<span style="flex:1;display:flex;align-items:center;">${input}${bindCtl}${audCtl}</span></div>`;
       }
     }
     document.getElementById("featForm").innerHTML = html || `<span class='meta'>${LANG==='en'?'nothing to set':'无可调项'}</span>`;
@@ -681,8 +687,12 @@ async function loadFeatures(){
       } else if (s.type === "bool"){
         const v = String(s.value).toLowerCase();
         el.value = (v==="1"||v==="true"||v==="on") ? "1" : "0";
-      } else if (s.type !== "secret"){ el.value = s.value == null ? "" : s.value; }
+      } else if (s.type !== "secret" && s.key !== "AUDIO_INPUT" && s.key !== "AUDIO_OUTPUT"){
+        el.value = s.value == null ? "" : s.value;   // audio selects: filled by loadAudio()
+      }
     }
+    document.querySelectorAll(".audRescanBtn").forEach(b => { b.onclick = loadAudio; });
+    bindAudioSelects();
     const bb = document.getElementById("bindBtn");
     if (bb) bb.onclick = startBind;
     // Pre-select the capture device to match the current binding.
@@ -761,6 +771,10 @@ async function saveFeatures(){
   for (const s of featSchema){
     const el = document.getElementById("f_"+s.key); if (!el) continue;
     if (s.secret && !el.value) continue;   // don't clobber a hidden secret
+    // Audio devices save immediately on selection (POST /api/audio); keeping
+    // them out of the batch also stops an empty "follow" display value from
+    // clobbering a pin for a device that is currently unplugged.
+    if (s.key === "AUDIO_INPUT" || s.key === "AUDIO_OUTPUT") continue;
     updates[s.key] = el.value;
   }
   try {
@@ -773,42 +787,62 @@ async function saveFeatures(){
 }
 document.getElementById("featSave").onclick = saveFeatures;
 // ---- audio devices: follow-system by default, pin optional ----
+function fillAudioSel(sel, list, cur, active){
+  sel.innerHTML = "";
+  const o = document.createElement("option");
+  o.value = "";
+  o.textContent = t("audio.follow") + (active && active.name ? t("audio.cur", {n:active.name}) : "");
+  sel.appendChild(o);
+  let found = false;
+  for (const dev of (list||[])){
+    const op = document.createElement("option");
+    op.value = dev.name;
+    op.textContent = dev.name + (dev.default ? t("audio.sysdefault") : "");
+    if (cur && dev.name === cur){ op.selected = true; found = true; }
+    sel.appendChild(op);
+  }
+  // A pinned device that is currently unplugged must stay visible (and keep
+  // its value) instead of silently looking like "follow system".
+  if (cur && !found){
+    const op = document.createElement("option");
+    op.value = cur; op.textContent = cur + t("audio.missing"); op.selected = true;
+    sel.appendChild(op);
+  }
+}
 async function loadAudio(){
   try {
     const r = await fetch("/api/audio"); const d = await r.json();
-    const fill = (sel, list, cur, active) => {
-      sel.innerHTML = "";
-      const o = document.createElement("option");
-      o.value = "";
-      o.textContent = t("audio.follow") + (active && active.name ? t("audio.cur", {n:active.name}) : "");
-      sel.appendChild(o);
-      for (const dev of (list||[])){
-        const op = document.createElement("option");
-        op.value = dev.name;
-        op.textContent = dev.name + (dev.default ? t("audio.sysdefault") : "");
-        if (cur && dev.name === cur) op.selected = true;
-        sel.appendChild(op);
-      }
-    };
-    fill(document.getElementById("setMic"), d.input, (d.current||{}).input, (d.active||{}).input);
-    fill(document.getElementById("setSpk"), d.output, (d.current||{}).output, (d.active||{}).output);
+    fillAudioSel(document.getElementById("setMic"), d.input, (d.current||{}).input, (d.active||{}).input);
+    fillAudioSel(document.getElementById("setSpk"), d.output, (d.current||{}).output, (d.active||{}).output);
+    const gmic = document.getElementById("f_AUDIO_INPUT");
+    if (gmic) fillAudioSel(gmic, d.input, (d.current||{}).input, (d.active||{}).input);
+    const gspk = document.getElementById("f_AUDIO_OUTPUT");
+    if (gspk) fillAudioSel(gspk, d.output, (d.current||{}).output, (d.active||{}).output);
     const a = d.active || {};
     document.getElementById("audNow").textContent =
       "🎤 " + ((a.input && a.input.name) || t("audio.none")) + " / 🔊 " + ((a.output && a.output.name) || t("audio.none"));
   } catch(e){}
 }
-["setMic","setSpk"].forEach(id => {
-  document.getElementById(id).onchange = async (ev) => {
-    const kind = id === "setMic" ? "input" : "output";
-    try {
-      await fetch("/api/audio", {method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({[kind]: ev.target.value})});
-      loadAudio();
-    } catch(e){}
-  };
-});
+async function pinAudio(kind, value){
+  const msg = document.getElementById("featMsg");
+  try {
+    await fetch("/api/audio", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({[kind]: value})});
+    await loadAudio();
+    if (msg){ msg.className = "meta ok"; msg.textContent = t("feat.saved"); }
+  } catch(e){
+    if (msg){ msg.className = "meta bad"; msg.textContent = String(e); }
+  }
+}
+function bindAudioSelects(){
+  [["setMic","input"],["setSpk","output"],["f_AUDIO_INPUT","input"],["f_AUDIO_OUTPUT","output"]].forEach(([id, kind]) => {
+    const sel = document.getElementById(id);
+    if (sel) sel.onchange = (ev) => pinAudio(kind, ev.target.value);
+  });
+}
 document.getElementById("openFeat").addEventListener("click", loadAudio);
 document.getElementById("audRefresh").onclick = loadAudio;
+bindAudioSelects();
 loadAudio();
 async function poll(){
   try {
@@ -1082,12 +1116,24 @@ class _Handler(BaseHTTPRequestHandler):
     def _origin_ok(self) -> bool:
         """Block cross-site (CSRF) POSTs: a browser always sends Origin on a
         cross-origin POST, even with mode:'no-cors'. Non-browser clients
-        (urllib/http.client/tests) send none and are allowed."""
+        (urllib/http.client/tests) send none and are allowed.
+
+        Same-origin is checked against the request's Host header, so LAN
+        access through --bind-ip 0.0.0.0 works regardless of the address used
+        (the old fixed 127.0.0.1/localhost whitelist 403'd every LAN POST).
+        """
         origin = self.headers.get("Origin")
         if not origin:
             return True
-        port = self.server.server_address[1]
-        return origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return False
+        try:
+            parts = urlsplit(origin)
+        except ValueError:
+            return False
+        return (parts.scheme in ("http", "https")
+                and parts.netloc.lower() == host)
 
     def do_POST(self):
         if not self._host_ok() or not self._origin_ok():
@@ -1096,7 +1142,8 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/api/ask_voice":
             self._ask_voice()
             return
-        if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind") and not self._local_only():
+        if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind",
+                         "/api/profile") and not self._local_only():
             self._send_json(403, {"error": "config changes are local-only"})
             return
         if self.path == "/api/llm":

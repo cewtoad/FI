@@ -1,34 +1,32 @@
+
 @echo off
 chcp 65001 >nul
 title F1 Race Engineer - Voice
 cd /d "%~dp0"
 
-set "PY="
-if exist "%~dp0python.exe" set "PY=%~dp0python.exe"
-if not defined PY (
-    where py >nul 2>nul && set "PY=py -3.12"
-)
-if not defined PY (
-    where python >nul 2>nul && set "PY=python"
-)
-if not defined PY (
-    echo [!] Python not found. Use the full pack or install Python 3.12.
-    pause
-    exit /b 1
-)
+rem Pick a Python. NOTE: the embedded full path is NEVER stored in PY and
+rem never expanded inside a parenthesized block - a pack path like
+rem "D:\新建文件夹 (3)\" would inject an unquoted ")" at block parse time and
+rem kill the script even when the taken branch never used it (the actual
+rem root cause of the "window flashes on other machines" report). goto keeps
+rem only the taken branch parseable; the embedded launch is always the
+rem quoted "%~dp0python.exe", which is safe for spaces and parentheses.
+if exist "%~dp0python.exe" goto :run_embedded
+where py >nul 2>nul && set "PY=py -3.12"
+if defined PY goto :run_fallback
+where python >nul 2>nul && set "PY=python"
+if defined PY goto :run_fallback
+echo [!] Python not found.
+echo     Use the full pack - bundled runtime - or install Python 3.12.
+pause
+exit /b 1
 
-echo Starting VOICE mode... (press NUMPAD + in game to talk, Ctrl+C to quit)
-echo NOTE: run ONLY one mode at a time (web OR voice), or they fight over UDP.
-echo.
-rem Quoted embedded runtime: a pack path with spaces would break the launch.
-if exist "%~dp0python.exe" (
-    "%~dp0python.exe" FI.py --voice
-) else (
-    %PY% FI.py --voice
-)
+:run_embedded
+"%~dp0python.exe" FI.py --voice
 if errorlevel 1 pause
+exit /b 0
 
-echo.
-echo Exited.
-timeout /t 3 /nobreak >nul
+:run_fallback
+%PY% FI.py --voice
+if errorlevel 1 pause
 exit /b 0

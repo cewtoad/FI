@@ -2,15 +2,41 @@
 
 > 记录测试中发现但暂未修复的问题，供后续处理。
 
-## ✅ 全量包 bat 闪退修复（2026-10-03，用户分发反馈）
+## ✅ 第三轮审查 P0/P1 修复（2026-10-03）
 
-三个叠加原因：① 五个启动 bat 是 LF 换行（cmd 在部分 Windows 上对 LF 括号块直接
-语法中止）；② start.bat 的 if 块内 echo 文本含 `)`（"(bundled runtime)"）——括号
-提前闭合整块，任何机器上都立即中止（"or was unexpected at this time."）；③
-网页模式.bat/语音模式.bat/voice.bat/整体测试.bat 没进打包清单。修复：全部转
-CRLF 并加 `.gitattributes` 钉死、去掉块内括号、启动器全部入 STATIC_FILES、
-启动后加 `if errorlevel 1 pause`。教训：**bat 文件必须 CRLF 且 if 块内的 echo
-绝不能含未转义括号；打包含哪些启动器要以清单验证而不是 README 口头承诺。**
+- **P0 快答路由**：`laps_remaining` 提到路由表首位（"前面还剩多少圈"不再被
+  car_ahead 的"前面"截胡）；rival 配速触发词去掉裸"多少"并补"多快"。
+- **P0 云 STT**：`CloudSTT.transcribe` mime 改默认参 + 裸 float32 PCM 自动包
+  16 位 WAV（新增 `pcm_to_wav_bytes`）——语音模式下配 key 必现的 TypeError 已修。
+- **P0 LAN 面板**：`webui._origin_ok` 改为 Origin 与请求 Host 同源比对
+  （`--bind-ip 0.0.0.0` 时 LAN POST 全 403 的回归）；`/api/profile` 补进
+  `_local_only` 名单（原可被 LAN 改写并持久化 .env）。
+- **P1 race_model**：PitWindow 闩锁按 `session_uid` 换场重臂（第二场同窗口号
+  不再误判 done）；**P1 state**：flashback 待回滚期间冻结位置基线差分
+  （CAR_STATUS 重建不再回填旧位置，不再误报"下降 N 位"）。
+- 回归：`tests/test_review3_fixes.py` 9 条密闭；全套 281 collected / exit 0。
+- 仍未修 P2 清单见 SUMMARY_v3.md §7。
+
+## ✅ 全量包 bat 闪退修复（2026-10-03，用户分发反馈，豆包远端确诊）
+
+**真根因（豆包在用户机器上确认）**：解压路径含英文括号（如 `D:\新建文件夹 (3)\`）。
+启动器的 `if (...) else (...)` 中 else 分支的 `%PY%` 展开后是**不带引号**的完整
+路径，路径里的 `)` 被 cmd 在**整句解析阶段**（先于分支执行）误判为代码块结束 →
+语法错误立即中止——即使运行时走的是 if 分支（嵌入式 python 存在）也一样死。
+叠加的另外三因：① 五个启动 bat 是 LF 换行（cmd 对 LF 括号块解析不稳）；
+② start.bat 的 if 块内 echo 文本含 `)`（"(bundled runtime)"）；③ 网页模式.bat/
+语音模式.bat/voice.bat/整体测试.bat 没进打包清单。
+
+修复（全部启动器统一重构为 goto 三分支：只有被走到的分支才会被解析；
+嵌入式 python 一律以引号包裹的 `"%~dp0python.exe"` 直接调用，PY 变量只存
+`py -3.12`/`python` 这类安全词；整体测试.bat 的 8 个 %PY% 调用点同样改造）：
+已在与报告一致的同名 `(3)` 路径下复现验证——重构前必死，重构后正常启动。
+另加 `.gitattributes` 钉死 `*.bat/*.ps1=crlf`、启动后 `if errorlevel 1 pause`、
+启动器全部入 STATIC_FILES。
+
+**教训**：bat 里引号只保护"引号内"，**任何 %VAR% 在块内展开都是先于分支执行的
+原文注入**——含括号的路径绝不能进块内变量展开；goto 分支化是唯一彻底的写法。
+打包含哪些启动器要以清单验证而不是 README 口头承诺。
 
 ## ✅ CI 首绿修复（2026-10-03，release workflow 首次真正运行）
 

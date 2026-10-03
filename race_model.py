@@ -71,6 +71,9 @@ class RaceModel:
         # window rotates to the next planned stop.
         self._pit_window_id: Optional[tuple] = None
         self._pit_window_stop0: Optional[int] = None
+        # Session identity: the RaceModel instance lives for the whole process,
+        # so the latch above must be re-armed when a new session starts.
+        self._session_uid: Any = None
 
     # ---------------------------------------------------------------- config
 
@@ -98,6 +101,15 @@ class RaceModel:
         # The real TelemetryState snapshot keeps the Session-packet fields under
         # latest.session; top-level "session" only has uid/type/track/total_laps.
         session = {**(snap.get("session") or {}), **(latest.get("session") or {})}
+        # A new session starts with a clean slate: the pit-window latch keeps
+        # the stop count from the previous race, so without this reset the
+        # second race's window is marked "done" before it even opens (or never
+        # re-arms when the same ideal/latest lap numbers come around again).
+        uid = session.get("session_uid")
+        if uid != self._session_uid:
+            self._session_uid = uid
+            self._pit_window_id = None
+            self._pit_window_stop0 = None
         lap = latest.get("lap", {}) or {}
         status = latest.get("status", {}) or {}
         fuel = snap.get("fuel", {}) or {}
