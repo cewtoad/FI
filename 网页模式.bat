@@ -26,6 +26,7 @@ if exist "%~dp0python.exe" (
 ) else (
     %PY% FI.py --web
 )
+if errorlevel 1 pause
 
 echo.
 echo Exited.

@@ -118,6 +118,23 @@ Xbox（VID 045E）走微软 XInput 驱动栈，Raw Input 同样以 usage 0x01/0x
   已校验含 SenseVoice 模型/sherpa-onnx/inputs/tts_text/tools），手动拖传到
   Release 页。
 
+## 5d. 全量包 bat 闪退修复（用户分发反馈）
+
+用户在别的机器上双击 bat "弹一下窗口就没了"。三个叠加原因，全部修复：
+- **LF 换行**：start.bat/启动.bat/网页模式.bat/语音模式.bat/voice.bat 全是 LF
+  （工具直写、从未被 checkout 规范化；只有手写的 整体测试.bat 是 CRLF）——
+  cmd 对 LF 的括号块解析在不同 Windows 上会直接语法中止。已全部转 CRLF，
+  并加 `.gitattributes`（*.bat/*.ps1 eol=crlf）永久钉死。
+- **start.bat 致命括号**：`echo Use the full pack (bundled runtime) or install...`
+  在 if 块内的 echo 文本含 `)`，提前闭合整块 → `or was unexpected at this time.`
+  → **任何机器上都立即中止**（与换行无关）。已改写去掉括号；审计了全部 bat，
+  其余括号均在顶层安全位置。
+- **包缺启动器**：网页模式.bat/语音模式.bat/voice.bat/整体测试.bat 不在打包清单里
+  （README 却引用了它们）→ 已加入 STATIC_FILES。
+- 加固：所有 bat 启动后 `if errorlevel 1 pause`（崩溃时窗口停留可见错误，正常
+  退出不拦截）。解压包实测：start.bat/启动.bat 弹出菜单、网页模式.bat 起服务、
+  语音模式.bat 起语音链路（stt=sensevoice）。
+
 ## 6. 测试
 
 新增 `tests/test_hid_source.py`（13 条：边沿/捕获状态机/hat/设备名匹配/人话解读）、

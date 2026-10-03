@@ -1,0 +1,8 @@
+# Line endings are pinned because .bat files with LF endings flash-and-die on
+# other machines (cmd misparses parenthesized blocks). Never let this drift.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf

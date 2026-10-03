@@ -2,6 +2,16 @@
 
 > 记录测试中发现但暂未修复的问题，供后续处理。
 
+## ✅ 全量包 bat 闪退修复（2026-10-03，用户分发反馈）
+
+三个叠加原因：① 五个启动 bat 是 LF 换行（cmd 在部分 Windows 上对 LF 括号块直接
+语法中止）；② start.bat 的 if 块内 echo 文本含 `)`（"(bundled runtime)"）——括号
+提前闭合整块，任何机器上都立即中止（"or was unexpected at this time."）；③
+网页模式.bat/语音模式.bat/voice.bat/整体测试.bat 没进打包清单。修复：全部转
+CRLF 并加 `.gitattributes` 钉死、去掉块内括号、启动器全部入 STATIC_FILES、
+启动后加 `if errorlevel 1 pause`。教训：**bat 文件必须 CRLF 且 if 块内的 echo
+绝不能含未转义括号；打包含哪些启动器要以清单验证而不是 README 口头承诺。**
+
 ## ✅ CI 首绿修复（2026-10-03，release workflow 首次真正运行）
 
 仓库根曾有一个 pits-n-giggles 时代的 `__init__.py`（骨架 docstring，无代码引用）。

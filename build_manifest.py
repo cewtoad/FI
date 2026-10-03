@@ -106,8 +106,12 @@ PYINSTALLER_EXCLUDES = ["tkinter", "matplotlib", "faster_whisper", "ctranslate2"
 # still valid without it (Piper simply reports unavailable).
 OPTIONAL_RESOURCE_DIRS = ["piper_models"]
 
-# Static files copied into the full pack.
-STATIC_FILES = [".env.example", "README.md", "LICENSE", "FIRST_RUN.txt", "start.bat"]
+# Static files copied into the full pack (all the launchers the README
+# promises: start.bat / 启动.bat / 网页模式.bat / 语音模式.bat / voice.bat /
+# 整体测试.bat — 启动.bat is additionally copied by build_release.ps1).
+STATIC_FILES = [".env.example", "README.md", "LICENSE", "FIRST_RUN.txt",
+                "start.bat", "网页模式.bat", "语音模式.bat", "voice.bat",
+                "整体测试.bat"]
 
 
 def missing_modules() -> list:

@@ -27,6 +27,7 @@ if exist "%~dp0python.exe" (
 ) else (
     %PY% FI.py --voice
 )
+if errorlevel 1 pause
 
 echo.
 echo Exited.

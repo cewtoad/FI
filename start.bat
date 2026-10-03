@@ -15,7 +15,7 @@ if not defined PY (
 )
 if not defined PY (
     echo [!] Python not found.
-    echo     Use the full pack (bundled runtime) or install Python 3.12.
+    echo     Use the full pack - bundled runtime - or install Python 3.12.
     pause
     exit /b 1
 )
@@ -27,6 +27,7 @@ if exist "%~dp0python.exe" (
 ) else (
     %PY% FI.py
 )
+if errorlevel 1 pause
 
 echo.
 echo Exited.
