@@ -38,7 +38,7 @@ MAX_BODY_BYTES = 64 * 1024
 # Only one LLM request in flight at a time; extra callers get 429.
 _ASK_SEMAPHORE = threading.Semaphore(1)
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 _RELEASES_API = "https://api.github.com/repos/cewtoad/FI/releases/latest"
 _version_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
@@ -992,9 +992,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _local_only(self) -> bool:
         """True when the request originates from the local machine.
 
-        Config-writing endpoints (/api/llm, /api/audio) must never be reachable
-        from the LAN, even if the panel is bound to 0.0.0.0 - otherwise anyone
-        on the network could overwrite the API key and persist it to .env.
+        Config writes, questions (they spend the LLM key), settings reads
+        (masked key suffix) and session exports must never be reachable from
+        the LAN, even if the panel is bound to 0.0.0.0. /api/state and the
+        page itself stay readable so a LAN viewer can still watch telemetry.
         """
         addr = self.client_address[0] if self.client_address else ""
         return addr in ("127.0.0.1", "::1", "localhost")
@@ -1011,6 +1012,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             self._send(403, b"forbidden host", "text/plain")
+            return
+        if self.path in ("/api/settings", "/api/export", "/api/export_txt") \
+                and not self._local_only():
+            self._send_json(403, {"error": "this endpoint is local-only"})
             return
         if self.path == "/" or self.path.startswith("/index"):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
@@ -1139,12 +1144,13 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._host_ok() or not self._origin_ok():
             self._send(403, b"forbidden origin", "text/plain")
             return
+        if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind",
+                         "/api/profile", "/api/ask", "/api/ask_voice") \
+                and not self._local_only():
+            self._send_json(403, {"error": "this endpoint is local-only"})
+            return
         if self.path == "/api/ask_voice":
             self._ask_voice()
-            return
-        if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind",
-                         "/api/profile") and not self._local_only():
-            self._send_json(403, {"error": "config changes are local-only"})
             return
         if self.path == "/api/llm":
             self._set_llm()

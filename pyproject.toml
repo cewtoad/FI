@@ -1,6 +1,6 @@
 [project]
 name = "f1-race-engineer"
-version = "0.2.0"
+version = "0.5.2"
 description = "Read-only AI race engineer for F1 UDP telemetry"
 readme = "README.md"
 requires-python = ">=3.11"

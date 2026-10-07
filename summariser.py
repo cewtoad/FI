@@ -170,6 +170,9 @@ class Summariser:
             facts["fuel_surplus_laps"] = fuel.get("surplus_laps")
             facts["fuel_rate_kg_per_lap"] = fuel.get("curr_fuel_rate_kg_per_lap")
             facts["predicted_final_fuel_kg"] = fuel.get("predicted_final_fuel_kg")
+            # Same deficit threshold the radio rule uses, so the local fast
+            # answer and the proactive radio can never disagree.
+            facts["fuel_deficit_threshold_laps"] = self.fuel_deficit_laps
 
         if car2:
             facts["active_aero"] = car2.get("active_aero_mode")

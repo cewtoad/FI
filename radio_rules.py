@@ -30,6 +30,10 @@ class RuleCtx:
     now: float
     settings: Any                   # config.Config
     names: Any                      # names.NameRenderer
+    # Previous tick's lap dict (from the director). Lets state-based rules fire
+    # on transitions (e.g. a re-issued unserved penalty) instead of nagging
+    # every tick for a persistent condition.
+    prev_lap: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,28 @@ def _rule_pit_window_open(ctx: RuleCtx) -> Optional[Alert]:
                   ctx.now, _lap_key(ctx, "pit_window_open"))
 
 
+def _rule_pit_window_warn(ctx: RuleCtx) -> Optional[Alert]:
+    """PIT_WINDOW_WARN_LAPS: heads-up N laps before the window opens."""
+    rule = _RULES["pit_window_warn"]
+    w = ctx.curr.pit_window
+    if w is None or w.state != "not_open" or not w.ideal_lap:
+        return None
+    lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
+    cur = lap.get("current_lap_num")
+    warn = 2
+    try:
+        warn = int(ctx.settings.get_int("PIT_WINDOW_WARN_LAPS", 2))
+    except Exception:  # noqa: BLE001
+        warn = 2
+    if not isinstance(cur, int) or warn <= 0:
+        return None
+    if w.ideal_lap - cur == warn:
+        return _alert(rule, T.render("pit_window_warn", laps=warn,
+                                     ideal=w.ideal_lap),
+                      ctx.now, _lap_key(ctx, "pit_window_warn"))
+    return None
+
+
 def _rule_pit_window_last(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["pit_window_last"]
     if _window_state(ctx.prev) == "last_lap" or _window_state(ctx.curr) != "last_lap":
@@ -329,13 +355,21 @@ def _rule_unserved_penalty(ctx: RuleCtx) -> Optional[Alert]:
     lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
     dt = lap.get("num_unserved_dt_pens") or 0
     sg = lap.get("num_unserved_sg_pens") or 0
-    if dt or sg:
-        kind = "停走" if sg else "通过"
-        # Count-scoped: a second unserved penalty while one is pending must
-        # alert again (the old fixed key stayed silent for the whole session).
-        return _alert(rule, T.render("unserved_penalty", kind=kind), ctx.now,
-                      f"unserved_{kind}_{dt + sg}")
-    return None
+    if not (dt or sg):
+        return None
+    # Fire on an INCREASE vs the previous tick: a persistent unserved penalty
+    # stays quiet, while a new penalty (or one served then re-issued) alerts.
+    prev = ctx.prev_lap or {}
+    prev_dt = prev.get("num_unserved_dt_pens") or 0
+    prev_sg = prev.get("num_unserved_sg_pens") or 0
+    if dt <= prev_dt and sg <= prev_sg:
+        return None
+    kind = "停走" if sg else "通过"
+    # Lap-scoped key: a re-issue later in the race with the same count fires
+    # again (the old fixed key stayed silent for the whole session).
+    cur = lap.get("current_lap_num")
+    return _alert(rule, T.render("unserved_penalty", kind=kind), ctx.now,
+                  f"unserved_{kind}_{dt + sg}_{cur if isinstance(cur, int) else 'x'}")
 
 
 def _rule_undercut_risk(ctx: RuleCtx) -> Optional[Alert]:
@@ -343,11 +377,6 @@ def _rule_undercut_risk(ctx: RuleCtx) -> Optional[Alert]:
     behind = ctx.curr.behind
     if behind is None or behind.gap_ms_now > 3000:
         return None
-    lap = (ctx.snapshot.get("latest", {}) or {}).get("lap", {}) or {}
-    if lap.get("pit_status") == "PITTING":
-        # The opponent in front pitting is an *opportunity*, handled elsewhere;
-        # here we only flag the car behind us pitting (undercut risk).
-        pass
     lb = ctx.snapshot.get("leaderboard") or []
     for r in lb:
         if r.get("car_index") == behind.target_index and r.get("pit_status") in ("PITTING", "IN_PIT_AREA"):
@@ -451,6 +480,21 @@ def _rule_gap_report(ctx: RuleCtx) -> Optional[Alert]:
     text = T.render("gap_report",
                     ahead=_fmt_gap(ahead.gap_ms_now) if ahead else "-",
                     behind=_fmt_gap(behind.gap_ms_now) if behind else "-")
+    if mode == "on_change":
+        # Announce when the tracked gap actually moves (>= 0.5s); a stable gap
+        # stays quiet instead of reporting every lap.
+        gap_now = ahead.gap_ms_now if ahead is not None else behind.gap_ms_now
+        prev_gap = None
+        if ctx.prev is not None:
+            if ahead is not None and ctx.prev.ahead is not None:
+                prev_gap = ctx.prev.ahead.gap_ms_now
+            elif ahead is None and ctx.prev.behind is not None:
+                prev_gap = ctx.prev.behind.gap_ms_now
+        if gap_now is None or prev_gap is None \
+                or abs(float(gap_now) - float(prev_gap)) < 500:
+            return None
+        return _alert(rule, text, ctx.now,
+                      f"gap_chg_{cur}_{int(float(gap_now) // 500)}")
     return _alert(rule, text, ctx.now, f"gap_{cur}")
 
 
@@ -518,9 +562,12 @@ def _rule_practice_long_run(ctx: RuleCtx) -> Optional[Alert]:
     pace = ctx.curr.flags.get("stint_avg_lap_s") if ctx.curr.flags else None
     if pace:
         avg = f"{pace:.3f}s"
+    # Once per stint, not once per lap: start_lap identifies the stint, so a
+    # 20-lap run no longer re-announces its summary on every single lap.
+    scope = getattr(stint, "start_lap", None)
     return _alert(rule, T.render("practice_long_run", avg=avg,
                                  deg=stint.pace_degradation_s_per_lap),
-                  ctx.now, f"practice_long_{ctx.curr.upto_lap}")
+                  ctx.now, f"practice_long_{scope if scope else ctx.curr.upto_lap}")
 
 
 # ---------------------------------------------------------------- time trial
@@ -562,10 +609,11 @@ def _fmt_gap(ms) -> str:
 _P0_RACE = ("sc_deployed", "vsc_deployed", "sc_ending", "red_flag",
             "engine_failure", "major_damage", "drs_fault", "ers_fault",
             "wrong_way", "penalty_issued", "player_retired")
-_P1_RACE = ("pit_window_open", "pit_window_last", "pit_window_missed",
-            "pit_sc_opportunity", "fuel_deficit", "tyre_critical",
-            "tyre_attention", "rain_incoming", "track_limits_warning",
-            "unserved_penalty", "undercut_risk", "yellow_ahead")
+_P1_RACE = ("pit_window_open", "pit_window_warn", "pit_window_last",
+            "pit_window_missed", "pit_sc_opportunity", "fuel_deficit",
+            "tyre_critical", "tyre_attention", "rain_incoming",
+            "track_limits_warning", "unserved_penalty", "undercut_risk",
+            "yellow_ahead")
 _P2_RACE = ("position_change", "fastest_lap_you", "gap_report",
             "lap_summary_chatty", "retirement_other", "final_lap", "chequered")
 

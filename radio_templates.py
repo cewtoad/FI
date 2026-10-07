@@ -28,6 +28,7 @@ TEMPLATES: Dict[str, str] = {
     # ---- P1 strategy ----
     "pit_window_open": ("进站窗口打开：理想第 {ideal} 圈，最晚第 {latest} 圈，"
                         "预计出站第 {rejoin} 位。"),
+    "pit_window_warn": "进站窗口还有 {laps} 圈打开（理想第 {ideal} 圈）。",
     "pit_window_last": "本圈是进站窗口最后一圈（第 {latest} 圈）。",
     "pit_window_missed": "已错过计划进站窗口（最晚第 {latest} 圈）。",
     "pit_sc_opportunity": ("当前安全车，进站窗口内（理想第 {ideal} 圈），"
@@ -67,9 +68,6 @@ TEMPLATES: Dict[str, str] = {
     "tt_lap_delta": "本圈 {delta}。",
     "tt_new_pb": "新个人最快圈：{time}。",
     # ---- system ----
-    "quiet_mode_on": "好的，安静模式。",
-    "quiet_mode_off": "恢复播报。",
-    "quiet_locked": "当前由设置锁定。",
     "answer": "{text}",
 }
 

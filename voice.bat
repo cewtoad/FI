@@ -7,7 +7,7 @@ cd /d "%~dp0"
 
 rem Pick a Python. NOTE: the embedded full path is NEVER stored in PY and
 rem never expanded inside a parenthesized block - a pack path like
-rem "D:\新建文件夹 (3)\" would inject an unquoted ")" at block parse time and
+rem "D:\new folder (3)\" would inject an unquoted ")" at block parse time and
 rem kill the script even when the taken branch never used it (the actual
 rem root cause of the "window flashes on other machines" report). goto keeps
 rem only the taken branch parseable; the embedded launch is always the

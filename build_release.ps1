@@ -5,15 +5,15 @@
 #                                     Python + 启动.bat  (~760MB, 解压即用)
 #
 # Usage:
-#   pwsh -File build_release.ps1 -Version 0.2.0
-#   pwsh -File build_release.ps1 -Version 0.2.0 -CoreOnly
-#   pwsh -File build_release.ps1 -Version 0.2.0 -FullOnly
+#   pwsh -File build_release.ps1 -Version 0.5.2
+#   pwsh -File build_release.ps1 -Version 0.5.2 -CoreOnly
+#   pwsh -File build_release.ps1 -Version 0.5.2 -FullOnly
 #
 # Requirements: PyInstaller (installed into build_lib/ if missing), and an
 # embedded Python zip from python.org for the full package.
 
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.5.2",
     [switch]$CoreOnly,
     [switch]$FullOnly,
     [string]$SttLib  = "stt_lib",

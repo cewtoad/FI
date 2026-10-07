@@ -119,6 +119,7 @@ class AudioPlayer:
                 dev_sr, max_out = sr, 2
             if dev_sr != sr:
                 data = _resample(data, sr, dev_sr)
+            data = _apply_volume(data, _volume_from_config())
             if data.ndim == 1 and max_out >= 2:
                 data = np.column_stack([data, data])
             elif data.ndim == 2 and data.shape[1] == 1 and max_out >= 2:
@@ -156,6 +157,24 @@ def _resample(data, sr_in: int, sr_out: int):
     return np.column_stack(cols).astype(np.float32)
 
 
+def _volume_from_config() -> float:
+    """TTS_VOLUME (0.0-2.0) read live so the config page hot-applies."""
+    try:
+        from config import get_config
+        v = float(get_config().get_float("TTS_VOLUME", 1.0))
+    except Exception:  # noqa: BLE001
+        return 1.0
+    return max(0.0, min(2.0, v))
+
+
+def _apply_volume(data, volume: float):
+    """Scale float samples and clip, so >1.0 cannot wrap/overflow the device."""
+    if volume == 1.0 or data is None or getattr(data, "size", 0) == 0:
+        return data
+    import numpy as np
+    return np.clip(data * float(volume), -1.0, 1.0)
+
+
 class SpeechArbiter:
     """Priority, gateable, interruptible single audio outlet."""
 
@@ -164,10 +183,12 @@ class SpeechArbiter:
                  clock: Callable[[], float] = time.monotonic,
                  expiries: Optional[Dict[float, float]] = None,
                  fx: Optional[Callable[[bytes, str], bytes]] = None,
+                 gate_max_wait: Optional[Callable[[], float]] = None,
                  logger: Optional[logging.Logger] = None) -> None:
         self.tts = tts
         self.player = player
         self._gate = gate
+        self._gate_max_wait = gate_max_wait
         self._clock = clock
         self._expiries = dict(DEFAULT_EXPIRIES)
         if expiries:
@@ -187,6 +208,11 @@ class SpeechArbiter:
         self.dropped_expired = 0
         self.dropped_failed = 0
         self.spoken = 0
+
+    #: A synth claim older than this means the worker is stuck (e.g. a Piper
+    #: g2pW hang): the item is dropped and the worker replaced, so synthesis
+    #: capacity recovers instead of the queue silently expiring forever.
+    SYNTH_TIMEOUT_S = 30.0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -225,8 +251,8 @@ class SpeechArbiter:
             return  # nothing to say; an unsynthesisable head would block the queue
         with self._cv:
             self._seq += 1
-            # [priority, seq, utt, audio, claimed]
-            item = [utt.priority, self._seq, utt, None, False]
+            # [priority, seq, utt, audio|None, claimed_at|None]
+            item = [utt.priority, self._seq, utt, None, None]
             heapq.heappush(self._heap, item)
             self._cv.notify_all()
 
@@ -266,10 +292,47 @@ class SpeechArbiter:
         """Highest-priority pending (unclaimed, unsynthesised) item, or None."""
         best = None
         for cand in self._heap:
-            if cand[3] is None and not cand[4]:
+            if cand[3] is None and cand[4] is None:
                 if best is None or (cand[0], cand[1]) < (best[0], best[1]):
                     best = cand
         return best
+
+    def _respawn_synth_worker(self) -> None:
+        """Replace a stuck synth worker (bounded), caller holds the lock."""
+        alive = [t for t in self._synth_workers if t.is_alive()]
+        if len(alive) >= max(4, self._synth_n * 2):
+            return
+        t = threading.Thread(target=self._synth_worker, daemon=True,
+                             name="f1tr-tts-r")
+        self._synth_workers.append(t)
+        t.start()
+
+    def _drop_dead_head_locked(self) -> bool:
+        """Pop an expired / hung un-synthesised heap head.
+
+        Caller holds the lock. Returns True when an item was dropped.
+        """
+        if not self._heap:
+            return False
+        item = self._heap[0]
+        if item[3] is not None:
+            return False                    # synthesised; the run loop plays it
+        now = self._clock()
+        claimed_at = item[4]
+        if claimed_at is not None and (now - claimed_at) > self.SYNTH_TIMEOUT_S:
+            heapq.heappop(self._heap)
+            self.dropped_failed += 1
+            self._respawn_synth_worker()
+            self._cv.notify_all()
+            return True
+        head = item[2]
+        if (now - head.created_at) > self._expiry_for(head.priority):
+            # Not synthesised yet and already stale: expiry used to be checked
+            # only after pop, so a head that never finished blocked the queue.
+            heapq.heappop(self._heap)
+            self.dropped_expired += 1
+            return True
+        return False
 
     def _synth_worker(self) -> None:
         """Priority-aware synthesis: an arriving P0 is picked before older
@@ -280,7 +343,7 @@ class SpeechArbiter:
                 while not self._stop.is_set():
                     item = self._pick_synth_item()
                     if item is not None:
-                        item[4] = True
+                        item[4] = self._clock()   # claim timestamp (watchdog)
                         break
                     self._cv.wait(timeout=0.1)
                 if item is None:
@@ -328,13 +391,9 @@ class SpeechArbiter:
                     # Peek top item; wait for its synthesis to finish.
                     item = self._heap[0]
                     if item[3] is None:
-                        # Not synthesised yet. Expire it here too: expiry used
-                        # to be checked only after pop, so a head that never
-                        # finished synthesis blocked the queue forever.
-                        head = item[2]
-                        if (self._clock() - head.created_at) > self._expiry_for(head.priority):
-                            heapq.heappop(self._heap)
-                            self.dropped_expired += 1
+                        # Drop an expired / hung head (a stuck Piper synthesis
+                        # gets its worker replaced) instead of blocking forever.
+                        if self._drop_dead_head_locked():
                             continue
                         # Give the pool a moment; higher-priority arrivals can
                         # still jump in front meanwhile.
@@ -370,8 +429,14 @@ class SpeechArbiter:
                 continue
 
     def _wait_for_gate(self, utt) -> bool:
-        """Return True when the gate opens before expiry (else drop)."""
-        deadline = utt.created_at + self._expiry_for(utt.priority)
+        """Return True when the gate opens before expiry / gate wait (else drop)."""
+        limit = self._expiry_for(utt.priority)
+        if self._gate_max_wait is not None:
+            try:
+                limit = min(limit, max(0.5, float(self._gate_max_wait())))
+            except Exception:  # noqa: BLE001
+                pass
+        deadline = utt.created_at + limit
         epoch = self._epoch
         while not self._stop.is_set():
             # PTT pressed (recording / interrupt_all) while we waited: this

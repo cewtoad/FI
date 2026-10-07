@@ -134,9 +134,15 @@ def _route_gap_leader(facts, q):
 
 
 def _route_fuel(facts, q):
+    # Threshold comes from the summariser (RADIO_FUEL_DEFICIT_LAPS), so the
+    # fast answer and the radio rule share one source; -0.2 is only the
+    # fallback for hand-made fact dicts.
+    threshold = facts.get("fuel_deficit_threshold_laps")
+    if not isinstance(threshold, (int, float)):
+        threshold = -0.2
     surplus = facts.get("fuel_surplus_laps")
     if isinstance(surplus, (int, float)):
-        if surplus < -0.2:
+        if surplus < threshold:
             return f"油量不足,完赛缺 {abs(surplus):.2f} 圈"
         if surplus > 1.0:
             return f"油量富余 {surplus:.2f} 圈"

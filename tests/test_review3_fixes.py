@@ -17,6 +17,7 @@ import json
 import logging
 import struct
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -133,6 +134,22 @@ def test_origin_guard_matches_request_host_for_lan_access():
     assert h._origin_ok() is True                      # non-browser client
 
 
+def _http_code(req, attempts=2):
+    """Return the status, retrying a Windows connection abort once."""
+    last = None
+    for i in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except urllib.error.URLError as e:
+            last = e
+            if i + 1 < attempts:
+                time.sleep(0.05)
+    raise last
+
+
 def test_profile_post_is_local_only(monkeypatch):
     import webui
     monkeypatch.setattr(webui._Handler, "_local_only", lambda self: False)
@@ -146,12 +163,27 @@ def test_profile_post_is_local_only(monkeypatch):
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/profile",
             data=json.dumps({"profile": "fast"}).encode(), method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                code = r.status
-        except urllib.error.HTTPError as e:
-            code = e.code
-        assert code == 403, code
+        assert _http_code(req) == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_spend_and_export_endpoints_are_local_only(monkeypatch):
+    import webui
+    monkeypatch.setattr(webui._Handler, "_local_only", lambda self: False)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), webui._Handler)
+    httpd.ctx = {"state": None, "summariser": None, "receiver": None,
+                 "engineer": None, "voice": None, "recorder": None}
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        for path in ("/api/settings", "/api/export", "/api/export_txt"):
+            assert _http_code(urllib.request.Request(base + path)) == 403, path
+        for path in ("/api/ask", "/api/ask_voice"):
+            req = urllib.request.Request(base + path, data=b"{}", method="POST")
+            assert _http_code(req) == 403, path
     finally:
         httpd.shutdown()
         httpd.server_close()

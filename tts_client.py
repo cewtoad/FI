@@ -99,6 +99,10 @@ class SapiTTS(TTSEngine):
         if not self.voice:
             self.voice = _pick_chinese_sapi_voice() or ""
         self.timeout = float(cfg.get("TTS_TIMEOUT", "30"))
+        if rate is None or rate == "":
+            # TTS_RATE from the config page applies to every engine built
+            # without an explicit pack rate.
+            rate = cfg.get("TTS_RATE", "").strip() or None
         self.rate = _sapi_rate(rate)
 
     @property
@@ -158,6 +162,8 @@ class PiperTTS(TTSEngine):
     def __init__(self, voice: Optional[str] = None, rate=None) -> None:
         cfg = get_config()
         self.voice_path = (voice or cfg.get("TTS_PIPER_VOICE", "")).strip()
+        if rate is None or rate == "":
+            rate = cfg.get("TTS_RATE", "").strip() or None
         # length_scale > 1 is slower; map our -10..10 rate to roughly 1 + rate/20.
         self.length_scale = _piper_length_scale(rate)
         self._piper = None

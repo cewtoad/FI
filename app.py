@@ -196,17 +196,34 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
     # Speech arbiter: only for voice mode (web mode uses the AlertLog only).
     if app.mode == "voice":
         try:
+            from radio_fx import make_radio_audio
             from speech import AudioPlayer, SpeechArbiter
             from voices import make_configured_tts as make_voice_tts
 
             engine = tts_engine or make_voice_tts()
             player = AudioPlayer(output_device=audio_output, logger=logger)
-            gate = None
-            if app.state is not None:
-                def gate():  # noqa: E306
-                    hold = get_config().get_float("RADIO_GATE_HOLD_S", 0.5)
-                    return app.state.is_on_straight(hold)
+
+            def gate():
+                cfg = get_config()
+                if not cfg.get_bool("RADIO_GATE_ENABLE", True):
+                    return True   # gate disabled: speak immediately
+                return app.state.is_on_straight(
+                    cfg.get_float("RADIO_GATE_HOLD_S", 0.5))
+
+            def gate_max_wait():
+                return get_config().get_float("RADIO_GATE_MAX_WAIT_S", 15.0)
+
+            def fx(audio, mime):
+                # Radio feel: short beep + light band-pass (WAV only; other
+                # formats pass through unchanged). Read live so the config
+                # page's toggles hot-apply.
+                cfg = get_config()
+                return make_radio_audio(audio,
+                                        beep=cfg.get_bool("RADIO_BEEP", True),
+                                        filt=cfg.get_bool("RADIO_FILTER", True))
+
             app.speech = SpeechArbiter(engine, player, gate=gate,
+                                       gate_max_wait=gate_max_wait, fx=fx,
                                        clock=time.monotonic, logger=logger)
         except Exception as e:  # noqa: BLE001
             logger.debug("speech arbiter unavailable: %r", e)

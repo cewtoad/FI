@@ -153,6 +153,7 @@ class LocalWhisperSTT(STTEngine):
         self.cpu_threads = cfg.get_int("STT_LOCAL_THREADS", 2)
         self._whisper = None
         self._model = None
+        self._load_lock = threading.Lock()
         try:
             from faster_whisper import WhisperModel
             self._whisper = WhisperModel
@@ -171,13 +172,18 @@ class LocalWhisperSTT(STTEngine):
         of the C: drive.
         """
         if self._model is None and self.available:
-            # Force CPU int8: faster-whisper otherwise auto-selects CUDA and
-            # fails on machines without cublas64_12.dll. CPU keeps the game's
-            # GPU free and needs no CUDA install (see KNOWN_ISSUES ISSUE-3).
-            self._model = self._whisper(
-                self.model_size, device="cpu", compute_type="int8",
-                cpu_threads=self.cpu_threads,
-                download_root=str(_MODELS_DIR))
+            # Single load even when the voice preloader and the first question
+            # race (SenseVoice already had this lock; Whisper did not).
+            with self._load_lock:
+                if self._model is not None:
+                    return
+                # Force CPU int8: faster-whisper otherwise auto-selects CUDA and
+                # fails on machines without cublas64_12.dll. CPU keeps the game's
+                # GPU free and needs no CUDA install (see KNOWN_ISSUES ISSUE-3).
+                self._model = self._whisper(
+                    self.model_size, device="cpu", compute_type="int8",
+                    cpu_threads=self.cpu_threads,
+                    download_root=str(_MODELS_DIR))
 
     def transcribe(self, audio, mime: str = "") -> str:
         """Transcribe raw audio.

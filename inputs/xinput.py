@@ -125,7 +125,7 @@ class XInputSource(InputSource):
                 value = lt if self.button == "lt" else rt
                 if value >= _TRIGGER_THRESHOLD:
                     return True
-            elif w & self._mask:
+            elif self._mask and (w & self._mask):
                 return True
         return False
 

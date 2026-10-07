@@ -4,7 +4,7 @@ title F1 Race Engineer - Self Test
 cd /d "%~dp0"
 
 rem NOTE: the embedded full path is NEVER stored in PY and never expanded
-rem inside a block - a pack path like "D:older (3)\" would inject an
+rem inside a block - a pack path like "D:\new folder (3)\" would inject an
 rem unquoted ")" at block parse time and kill the script. PY only ever holds
 rem a bare launcher name ("py -3.12" / "python"); the embedded runtime is
 rem launched as the quoted "%~dp0python.exe" at each call site.

@@ -274,7 +274,11 @@ class HidSource(InputSource):
     def _setup(self) -> None:
         """Create the message-only window and register Raw Input (loop thread)."""
         self._wndproc = WNDPROC(self._proc)
-        self._hwnd = _make_hid_window(self._wndproc, "F1TRHidTrigger")
+        # Unique class per instance: RegisterClassW does not overwrite, so a
+        # fixed name would route a restarted source to the OLD (possibly
+        # garbage-collected) wndproc.
+        class_name = f"F1TRHidTrigger{id(self._wndproc):X}"
+        self._hwnd = _make_hid_window(self._wndproc, class_name)
 
     def _pump(self) -> None:
         msg = wintypes.MSG()

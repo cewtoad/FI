@@ -184,15 +184,14 @@ v2 把项目从"被动问答"升级为会主动提醒的工程师。核心原则
 | `RADIO_ENABLE` | 总开关（默认开） |
 | `RADIO_VERBOSITY` | 话量：`minimal` / `normal` / `chatty`（默认 chatty） |
 | `RADIO_GATE_ENABLE` | 直道时机闸门：只在直道播报（默认开） |
-| `RADIO_QUIET_POLICY` | 安静模式：`in_game`（局内可切）/ `force_on` / `force_off` |
+| `RADIO_QUIET_POLICY` | 安静模式：`force_on`（只留安全播报）/ `force_off`（正常，默认）。旧值 `in_game` 等同正常播 |
 | `RADIO_BEEP` / `RADIO_FILTER` | 无线电提示音 / 轻度滤波 |
 
 播报内容按优先级：**P0 安全**（安全车/红旗/引擎故障/罚时…，立即播、绕过闸门）、
 **P1 策略**（进站窗口/油量/轮胎寿命/降雨…，等直道）、**P2 信息**（位置变化/
 最快圈/差距…，等直道、过期丢弃）。**进站只报窗口和后果，绝不下指令。**
 
-**安静模式**：网页/语音里双击 PTT 键切换，或配置页设策略。`force_on/force_off`
-时局内切换无效并提示"当前由设置锁定"；局内切换只改内存、不写盘。
+**安静模式**：只在配置页锁定 `RADIO_QUIET_POLICY`，局内没有静音快捷键（双击 PTT 静音已取消，否则会和 toggle 的停止录音打架）。
 
 ### 推演层（race model）
 
@@ -229,7 +228,8 @@ py -3.12 FI.py --config        # 浏览器打开 http://127.0.0.1:8766
 
 - **PTT 模式**：`PTT_MODE=hold`（按住说）/ `toggle`（按一下开始再按一下结束，默认）。
 - **触发键**：`PTT_BINDING`，格式 `kb:<vk>`（默认小键盘 +）、
-  `hid:VID:PID:byte:mask`（手柄普通键）或 `hat:VID:PID:byte:value`（十字键方向）——
+  `hid:VID:PID:byte:mask`（通用 HID 手柄普通键）、`hat:VID:PID:byte:value`（十字键方向）
+  或 `xi:<button>`（Xbox 走 XInput，如 `xi:a` / `xi:rb` / `xi:dup`）——
   网页【功能设置 → PTT 按键】一键捕获自动生成，旁边实时显示按键解读。
 - **车手名念法**：`DRIVER_NAME_STYLE=zh|en|number`（种子表 `data/driver_names.json`）。
 
@@ -252,13 +252,15 @@ py -3.12 -m tools.replay sessions\race.f1rec --port 20777 --speed 2
 ### 输入源（键盘 / 手柄 / 方向盘）
 
 PTT 触发源已模块化到 `inputs/` 包（`inputs/keyboard.py` 键盘、`inputs/hid.py`
-手柄/方向盘、`inputs/base.py` 公共基类，`input_sources.py` 保留兼容门面）。
-**DualSense 手柄已实测支持（USB）**；**Xbox 手柄已适配（机制同源，待硬件实测）**——
+通用 HID 手柄/方向盘、`inputs/xinput.py` Xbox XInput、`inputs/base.py` 公共基类，
+`input_sources.py` 保留兼容门面）。
+**DualSense 手柄已实测支持（USB）**；**Xbox 手柄已适配（走 XInput，待硬件实测）**——
 两者都在网页【功能设置 → PTT 按键】选择设备后点【一键捕获】：按住想用的键再松开
-即自动生成绑定（普通按键 `hid:VID:PID:byte:mask`、十字键 `hat:VID:PID:byte:value`），
+即自动生成绑定（DualSense 等 HID 普通键 `hid:VID:PID:byte:mask`、十字键
+`hat:VID:PID:byte:value`；Xbox 为 `xi:a` 这类按钮名），
 旁边实时显示按键解读，保存后重启语音模式生效；`PTT 模式`（按住 / 按一下开始结束）
-同页可选。其他外设的 Raw Input 偏移也可用 `py -3.12 -m tools.probe_dualsense`
-确认，详见 `KNOWN_ISSUES.md` 的"输入触发方式"章节。
+同页可选。其他外设的 Raw Input 偏移可用 `py -3.12 -m tools.probe_dualsense`
+确认，详见 `KNOWN_ISSUES.md` 的「输入触发方式（PTT）」章节（历史记录，含 DualSense 实测布局）。
 
 ### 自检
 
@@ -287,8 +289,12 @@ py -3.12 FI.py --selftest      # 依赖/资源/端口/音频/SAPI 音色/LLM 一
 | GET | `/api/version` | 检查是否有新版本（缓存 6 小时）|
 | GET | `/api/export` / `/api/export_txt` | 下载会话报告 |
 
-> `/api/llm` 与 `/api/audio` 的**写操作仅允许来自本机（127.0.0.1）**，
-> 即使面板绑定到局域网也无法被远程改写 key。
+> **仅本机可用**（即使面板用 `--bind-ip 0.0.0.0` 绑到局域网）：
+> 所有配置写入（`/api/llm`、`/api/audio`、`/api/settings`、`/api/bind`、
+> `/api/profile`）、提问（`/api/ask`、`/api/ask_voice`）、`GET /api/settings`
+> 以及会话导出（`/api/export`、`/api/export_txt`）——非本机一律 403。
+> 这样局域网既改不了 key，也花不掉你的额度、导不走会话。
+> 页面与 `/api/state`（实时遥测）在局域网仍可只读查看。
 
 **AI 档位**
 
@@ -377,7 +383,7 @@ F1_TR/
 ├── speech.py           唯一语音出口：SpeechArbiter + 非阻塞 AudioPlayer
 ├── voices.py           语音包 + TTS provider 注册表（SAPI / Piper）
 ├── names.py            车手名渲染（中文 / 英文 / 车号）
-├── inputs/             PTT 输入源包（base / bindings / keyboard / hid）
+├── inputs/             PTT 输入源包（base / bindings / keyboard / hid / xinput）
 ├── input_sources.py    输入源兼容门面（转发到 inputs/ 包）
 ├── tts_text.py         TTS 朗读规范化（圈速/名次/温度/百分比 → 可读中文）
 ├── ptt_controller.py   PTT 状态机（hold / toggle）

@@ -54,8 +54,6 @@ class RadioDirector:
         # Cache the name renderer: building one reloads driver_names.json from
         # disk, and the old code rebuilt it on every 2Hz tick.
         self._name_renderer = name_renderer
-        # Quiet-mode runtime override (T5.8), in-memory only.
-        self._quiet_override: Optional[bool] = None
 
     # ---------------------------------------------------------------- config
 
@@ -83,25 +81,11 @@ class RadioDirector:
         return self._cfg_bool("RADIO_ENABLE", True)
 
     def _quiet_active(self) -> bool:
-        policy = str(self._cfg_get("RADIO_QUIET_POLICY", "in_game")).lower()
-        if policy == "force_on":
-            return True
-        if policy == "force_off":
-            return False
-        return bool(self._quiet_override)
-
-    # ---------------------------------------------------------------- quiet
-
-    def set_quiet(self, on: bool) -> tuple:
-        """Toggle quiet mode at runtime. Returns (applied, message) (T5.8).
-
-        Only honoured when RADIO_QUIET_POLICY == in_game; locked otherwise.
-        """
-        policy = str(self._cfg_get("RADIO_QUIET_POLICY", "in_game")).lower()
-        if policy != "in_game":
-            return False, "quiet_locked"
-        self._quiet_override = bool(on)
-        return True, ("quiet_mode_on" if on else "quiet_mode_off")
+        # Quiet is a locked policy set on the config page (the old in-game
+        # double-tap toggle was removed in B1: fast tap-stop was misread as a
+        # double-tap). force_on = quiet; force_off / legacy in_game = normal.
+        policy = str(self._cfg_get("RADIO_QUIET_POLICY", "force_off")).lower()
+        return policy == "force_on"
 
     def quiet_state(self) -> bool:
         return self._quiet_active()
@@ -126,7 +110,8 @@ class RadioDirector:
             self._name_renderer = names
         ctx = RuleCtx(prev=prev, curr=curr, snapshot=snapshot,
                       new_events=new_events, now=now,
-                      settings=self._cfg, names=names)
+                      settings=self._cfg, names=names,
+                      prev_lap=self._snap_lap)
 
         emitted = 0
         for rule in self.rules:
@@ -184,6 +169,26 @@ class RadioDirector:
         last = self._last_fired.get(rule.id)
         return last is None or (now - last) >= rule.cooldown_s
 
+    def _per_lap_cap(self) -> int:
+        """RADIO_PER_LAP_CAP, capped by the verbosity default.
+
+        The verbosity level stays the ceiling (minimal keeps its tight limit);
+        the config value can only tighten it (0 = silence non-safety alerts).
+        """
+        default = _PER_LAP_CAP.get(self._verbosity(), 6)
+        raw = ""
+        if self._cfg is not None:
+            try:
+                raw = str(self._cfg.get("RADIO_PER_LAP_CAP", "") or "")
+            except Exception:  # noqa: BLE001
+                raw = ""
+        if raw.strip():
+            try:
+                return max(0, min(default, int(float(raw))))
+            except (TypeError, ValueError):
+                pass
+        return default
+
     def _accept(self, alert: Alert, now: float) -> bool:
         # Dedup: a given dedup_key fires ONCE per session (rules encode the
         # one-shot scope into the key: lap_summary_5, sc_deployed, pos_42...).
@@ -193,12 +198,13 @@ class RadioDirector:
         key = alert.dedup_key or alert.id
         if key in self._fired_keys:
             return False
-        # Per-lap cap (non-P0 only).
+        # Per-lap cap (non-P0 only): the effective cap honours
+        # RADIO_PER_LAP_CAP (tightening only).
         lap = (self._snap_lap or {}).get("current_lap_num")
         if lap != self._lap_marker:
             self._lap_marker = lap
             self._alerts_this_lap = 0
-        cap = _PER_LAP_CAP.get(self._verbosity(), 6)
+        cap = self._per_lap_cap()
         if alert.priority != PRIORITY_P0 and self._alerts_this_lap >= cap:
             return False
         # Global min gap (non-P0).
@@ -212,15 +218,13 @@ class RadioDirector:
                 return False
         self._last_fired[alert.id] = now
         self._fired_keys[key] = now
-        self._alerts_this_lap += 1
-        self._last_alert_at = now
+        # P0 must not eat the per-lap budget or restart the non-safety gap.
+        # On minimal (cap 1) one safety call used to silence pit/fuel for the
+        # rest of the lap, then hold the next line for RADIO_MIN_GAP_S.
+        if alert.priority != PRIORITY_P0:
+            self._alerts_this_lap += 1
+            self._last_alert_at = now
         return True
-
-    def _rule_cooldown(self, rule_id: str) -> float:
-        for r in self.rules:
-            if r.id == rule_id:
-                return r.cooldown_s
-        return 15.0
 
     def _emit(self, alert: Alert) -> None:
         self.total_alerts += 1

@@ -125,6 +125,24 @@ def test_per_lap_cap_on_normal():
     assert d._alerts_this_lap <= 3
 
 
+def test_p0_does_not_consume_lap_cap_or_min_gap():
+    cfg = _Cfg({"RADIO_VERBOSITY": "minimal", "RADIO_MIN_GAP_S": "100"})
+    d, out = _collect(cfg=cfg)
+    snap = _snap({"session_kind": "race", "flags": {},
+                  "pit_window": {"state": "not_open", "ideal_lap": 1,
+                                 "latest_lap": 9, "rejoin_position": 5}},
+                 lap={"current_lap_num": 4})
+    snap["latest"]["damage"] = {"engine_blown": True}
+    d.tick(snap, 0.0)
+    assert any(a.id == "engine_failure" for a in out)
+    assert d._alerts_this_lap == 0
+    d.tick(_snap({"session_kind": "race", "flags": {},
+                  "pit_window": {"state": "open", "ideal_lap": 1,
+                                 "latest_lap": 9, "rejoin_position": 5}},
+                 lap={"current_lap_num": 4}), 1.0)
+    assert any(a.id == "pit_window_open" for a in out), [a.id for a in out]
+
+
 def test_global_min_gap_spaces_non_p0():
     cfg = _Cfg({"RADIO_MIN_GAP_S": "100"})
     d, out = _collect(cfg=cfg)
@@ -143,18 +161,16 @@ def test_global_min_gap_spaces_non_p0():
 
 # ------------------------------------------------------------- quiet mode
 
-def test_quiet_in_game_toggles_and_locks():
-    cfg = _Cfg({"RADIO_QUIET_POLICY": "in_game"})
-    d, _ = _collect(cfg=cfg)
-    applied, msg = d.set_quiet(True)
-    assert applied and msg == "quiet_mode_on" and d.quiet_state()
-    applied, msg = d.set_quiet(False)
-    assert applied and msg == "quiet_mode_off"
-
-    d2, _ = _collect(cfg=_Cfg({"RADIO_QUIET_POLICY": "force_on"}))
-    applied, msg = d2.set_quiet(False)
-    assert not applied and msg == "quiet_locked"
-    assert d2.quiet_state() is True
+def test_quiet_policy_is_config_locked():
+    """Quiet is locked from config; the old in-game runtime toggle is gone."""
+    d, _ = _collect(cfg=_Cfg({"RADIO_QUIET_POLICY": "force_on"}))
+    assert d.quiet_state() is True
+    d2, _ = _collect(cfg=_Cfg({"RADIO_QUIET_POLICY": "force_off"}))
+    assert d2.quiet_state() is False
+    # legacy .env value "in_game" maps to normal (no runtime toggle exists)
+    d3, _ = _collect(cfg=_Cfg({"RADIO_QUIET_POLICY": "in_game"}))
+    assert d3.quiet_state() is False
+    assert not hasattr(d, "set_quiet")
 
 
 def test_quiet_suppresses_non_p0_but_not_p0():
