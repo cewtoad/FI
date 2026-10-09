@@ -24,7 +24,7 @@
 - 🔤 **TTS 朗读规范化**（v3）— 圈速/差距/温度/名次/百分比自动转可读中文（`1:31.204`→"1分31秒204"），只影响发音不改文本
 - 🎧 **观赛模式** — 焦点自动跟随被观看的车辆
 - 📝 **会话录制 + 赛后复盘**（v2）— JSON（原始）+ TXT（可读）；过终点自动生成本地复盘 TXT
-- 🖥 **双界面 + 配置页**（v2）— 网页面板（含实时功能开关） + 终端面板 + 独立配置页（`FI.py --config`）
+- 🖥 **双界面 + 统一设置**（v2/P1）— 网页面板「全部设置」为主入口（同端口 `/settings`）+ 终端面板 + 离线配置页（`FI.py --config`）
 - 🔌 **多模型** — 任意 OpenAI 兼容端点（DeepSeek/OpenAI/本地 Ollama…），运行时可切换 + 故障回退
 - ⚡ **本地快答** — "我P几/还剩几圈/油够不够/轮胎还能跑几圈/进站窗口"等问题不经过 AI，直接由遥测回答（零延迟、零成本）
 - 🎚 **智能档位** — fast / standard / deep 三档，控制回答长度与深度
@@ -50,6 +50,19 @@
 胎温、损伤、前车差距等高频问题仍可回答**（本地规则，不经过 AI）。
 
 > 下载后请核对发布页 `SHA256SUMS.txt` 中的校验值。
+
+### 自行打包（维护者）
+
+已有脚本，**不要另起一套打包**：
+
+```
+pwsh -File build_release.ps1 -Version 0.5.2          # core + full
+pwsh -File build_release.ps1 -Version 0.5.2 -CoreOnly
+```
+
+- 轻量包：PyInstaller onedir → `F1Engineer-core-*-win64.zip`（入口 `F1Engineer.exe`）
+- 全量包：embedded Python + STT 模型 → `F1Engineer-full-*-win64.zip`
+- 参数清单来自 `build_manifest.py`（与 CI 对齐）；校验见发布页 `SHA256SUMS.txt` / [RELEASE_SIGNING.md](RELEASE_SIGNING.md)
 
 ### 从源码运行（开发者）
 
@@ -205,24 +218,24 @@ v2 把项目从"被动问答"升级为会主动提醒的工程师。核心原则
 `DEBRIEF_DIR`（默认 `sessions/`）→ `debrief_YYYYMMDD_HHMMSS.txt`，含圈速表、
 每 stint 均值/衰退、稳定性、进站、关键事件、最终成绩。
 
-### 配置页（独立进程）
+### 设置（统一入口）
+
+**主入口：网页模式**（`127.0.0.1:8765`）顶部：
+- **AI 设置** —— 预设式服务商 + key；语音识别本地/云端快捷配置；
+- **全部设置** —— **同一套** `config_schema`：遥测相关阈值、耳麦、PTT（键盘/DualSense HID/Xbox XInput 一键捕获）、
+  TTS 语音包、主动播报、推演、复盘、自定义提示词等；保存写入 `.env` 并热加载（部分项需重启）。
+  同端口也可打开 **`/settings`**（深色完整设置页，与下面离线页同一 schema）。
+
+**自定义提示词**：在「全部设置」里编辑多行叠加（写入程序目录 `custom_system_prompt.txt`），
+或填 schema 单项 `CUSTOM_SYSTEM_PROMPT`（一行）。内置安全句「只建议、不代按」**始终追加在最后，无法去掉**。
+
+**离线孪生页**（未开网页时改 `.env`）：
 
 ```
 py -3.12 FI.py --config        # 浏览器打开 http://127.0.0.1:8766
 ```
-可视化修改所有配置，写入 `.env`；运行中的进程自动热加载。密钥只回显末 4 位。
 
-### 设置（网页模式内）
-
-网页面板（`127.0.0.1:8765`）顶部有两个独立入口：
-- **AI 设置** —— **预设式**：AI 服务商下拉（DeepSeek/硅基流动/OpenAI/Kimi/Qwen/Ollama，
-  选中自动填地址和模型）+ 粘贴 key 即可；下方语音识别区块可选本地识别（默认）或
-  云端 API（硅基流动 SenseVoice / OpenAI / 自定义），保存即测连接；
-- **功能设置** —— 语音设备、PTT 按键（设备下拉 + 一键捕获 + 实时按键解读）、
-  主动播报（开关/话量/差距频率/闸门/提示音）、本地识别模型与线程、
-  推演阈值、赛后复盘等，勾选后保存即生效（写入 `.env`，部分项需重启）。
-
-更全的选项（语音包、绑定向导、高级）点「功能设置」里的链接跳到配置页（8766）。
+密钥只回显末 4 位。程序员说明见 [PROGRAMMER.md](PROGRAMMER.md)。
 
 ### PTT 与车手名
 
@@ -260,7 +273,8 @@ PTT 触发源已模块化到 `inputs/` 包（`inputs/keyboard.py` 键盘、`inpu
 `hat:VID:PID:byte:value`；Xbox 为 `xi:a` 这类按钮名），
 旁边实时显示按键解读，保存后重启语音模式生效；`PTT 模式`（按住 / 按一下开始结束）
 同页可选。其他外设的 Raw Input 偏移可用 `py -3.12 -m tools.probe_dualsense`
-确认，详见 `KNOWN_ISSUES.md` 的「输入触发方式（PTT）」章节（历史记录，含 DualSense 实测布局）。
+确认；DualSense USB HID 偏移已在仓库 `inputs/hid.py` / `tools/probe_dualsense.py` 落地，
+Xbox 走 XInput（`inputs/xinput.py`，待你本机硬件冒烟）。
 
 ### 自检
 
@@ -358,7 +372,8 @@ flowchart TD
     SUM --> REC
 ```
 
-详见 [DESIGN.md](DESIGN.md)。代码评审见 [CODE_REVIEW.md](CODE_REVIEW.md)，已知问题见 [KNOWN_ISSUES.md](KNOWN_ISSUES.md)，迭代记录见 [SUMMARY_v3.md](SUMMARY_v3.md)。
+详见 [DESIGN.md](DESIGN.md) 与 [PROGRAMMER.md](PROGRAMMER.md)（测试 / 装配 / 设置 / ask 锁）。
+内部评审稿与历史 ISSUE 列表已移出仓库，避免死链。
 
 ---
 
@@ -373,7 +388,8 @@ F1_TR/
 ├── contracts.py        数据契约（Alert / Utterance / Stint / RaceModelState / VoicePack …）
 ├── config_schema.py    配置项单一真源（类型/范围/默认/分组）
 ├── config.py           配置中心（.env + 运行时可改，原子写 / 热加载 / 校验）
-├── config_ui.py        独立配置页进程（`FI.py --config`，端口 8766）
+├── config_ui.py        设置页（离线 `FI.py --config`:8766；网页同端口 `/settings`）
+├── PROGRAMMER.md       程序员速查：测试 / build_app / schema / ask 锁 / 打包
 ├── ticker.py           2Hz 分发线程（推演 + 播报 + 热加载 + 复盘触发）
 ├── race_model.py       推演层：Stint / 配速衰退 / GapTrend / PitWindow / 天气
 ├── radio_fx.py         无线电提示音 + 轻滤波（numpy）
@@ -395,7 +411,7 @@ F1_TR/
 ├── llm_client.py       OpenAI 兼容客户端 + make_llm（多端点 / 回退）
 ├── profiles.py         AI 档位（fast/standard/deep）+ 本地快答路由
 ├── audio.py            音频设备解析（列出 / 模糊匹配 / 热切换）
-├── prompts.py          系统提示词 + 快照文本构造（按意图选命名空间）
+├── prompts.py          系统提示词 + 用户叠加 + 不可覆盖安全句 + 快照构造
 ├── engineer.py         问答引擎
 ├── webui.py            网页 UI（含功能开关面板 + 告警条）
 ├── console_ui.py       终端 UI

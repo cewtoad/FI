@@ -179,7 +179,7 @@ class LocalWhisperSTT(STTEngine):
                     return
                 # Force CPU int8: faster-whisper otherwise auto-selects CUDA and
                 # fails on machines without cublas64_12.dll. CPU keeps the game's
-                # GPU free and needs no CUDA install (see KNOWN_ISSUES ISSUE-3).
+                # GPU free and needs no CUDA install (CPU path by design).
                 self._model = self._whisper(
                     self.model_size, device="cpu", compute_type="int8",
                     cpu_threads=self.cpu_threads,

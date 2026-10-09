@@ -151,7 +151,8 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 | `speech.py` | 统一语音出口：SpeechArbiter + 非阻塞 AudioPlayer（v2） |
 | `radio_director.py` / `radio_rules.py` / `radio_templates.py` | 主动播报规则引擎（v2，无 LLM） |
 | `debrief.py` | 赛后复盘 TXT（v2，本地） |
-| `config_ui.py` | 独立配置页进程（v2，端口 8766） |
+| `config_ui.py` | 设置页（离线 8766；网页模式同端口 `/settings`） |
+| `PROGRAMMER.md` | 程序员速查（测试 / 装配 / schema / ask 锁） |
 
 ### 入口
 
@@ -192,9 +193,10 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 | **主动播报** | ✅ `radio_director.py`：本地模板规则引擎（**无 LLM**），直道时机闸门 |
 | **统一音频出口** | ✅ 可打断、可暂停、优先级队列、过期丢弃 |
 | **赛后复盘** | ✅ 本地 TXT（`debrief.py`，不调 LLM） |
-| **配置页** | ✅ 独立进程 `FI.py --config`（端口 8766） |
+| **配置页** | ✅ 网页「全部设置」+ `/settings`（8765）为主；离线 `FI.py --config`（8766） |
+| **自定义提示词叠加** | ✅ `CUSTOM_SYSTEM_PROMPT` + `custom_system_prompt.txt`；`SAFETY_LINE` 不可覆盖 |
 | **原始包录制/回放** | ✅ `tools/udp_record.py` / `tools/replay.py`（`.f1rec`） |
-| **输入源抽象（键盘/手柄/方向盘）** | ✅ `input_sources.py` + `ptt_controller.py`；键盘已用，HID 待实测偏移 |
+| **输入源抽象（键盘/手柄/方向盘探针）** | ✅ `inputs/`（keyboard / DualSense HID 已测 / Xbox XInput 已适配待硬件冒烟）；方向盘仅只读 PTT 扩展点，不做注入 |
 | **可配置阈值** | ✅ `config_schema.py` 单一真源，热加载 |
 
 ### 规划中
@@ -203,7 +205,7 @@ CarTelemetry2（2026 新增，主动空动 + Overtake）。
 |---|---|
 | **比赛/计时双模式切换** | 按模式切换总结脚本读取的数据分类 |
 | **分段对比** | 本圈各段 vs 最快圈各段，回答"慢在哪一章" |
-| **胎温阈值标定** | 需回放真实数据（见 KNOWN_ISSUES 停止点） |
+| **胎温阈值标定** | 需回放真实数据标定 `TYRE_HOT_INNER_C`（当前默认 110 为占位） |
 
 ### 非目标（明确不做）
 

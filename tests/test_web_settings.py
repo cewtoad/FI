@@ -2,7 +2,7 @@
 
 The runtime web panel exposes /api/settings (GET) and /api/settings (POST,
 local-only) so users can flip feature switches (radio/voice/debrief/...)
-without opening the separate config page.
+without leaving the runtime panel; /settings is the same-port twin.
 """
 
 from __future__ import annotations
@@ -46,7 +46,8 @@ def _req(port, method, path, body=None):
 def test_page_has_feature_toggle_panel():
     assert 'id="featBox"' in webui.PAGE
     assert "loadFeatures" in webui.PAGE
-    assert "8766" in webui.PAGE          # link to the full config page
+    assert 'href="/settings"' in webui.PAGE  # same-port full settings page
+    assert "promptOverlay" in webui.PAGE     # custom prompt textarea
 
 
 def test_settings_panels_are_separate_and_dont_auto_close():
@@ -131,3 +132,21 @@ def test_get_settings_masks_stt_key(monkeypatch, tmp_path):
         assert "sk-secret-123" not in val      # masked, never leaks over GET
     finally:
         httpd.shutdown(); httpd.server_close()
+
+
+def test_settings_route_and_schema_on_webui():
+    httpd, port = _serve()
+    try:
+        status, body = _req(port, "GET", "/settings")
+        assert status == 200
+        assert "F1 Race Engineer" in body
+        status, body = _req(port, "GET", "/api/schema")
+        assert status == 200
+        data = json.loads(body)
+        keys = {s["key"] for s in data["settings"]}
+        assert "CUSTOM_SYSTEM_PROMPT" in keys
+        assert "RADIO_ENABLE" in keys
+        assert "groups" in data
+    finally:
+        httpd.shutdown(); httpd.server_close()
+

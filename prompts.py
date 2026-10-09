@@ -10,11 +10,14 @@ consistently. Two things keep token cost low:
      model must only use the provided numbers (no inventing laps or teams).
 
 The model is an F1-TV-style race engineer answering the driver's question.
+
+Customisation (P1): users may add an overlay via ``CUSTOM_SYSTEM_PROMPT``
+(one line in .env) and/or ``custom_system_prompt.txt`` next to .env. The
+hard ``SAFETY_LINE`` is always appended last and cannot be removed.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict
 
 SYSTEM_PROMPT = """你是车手的赛车工程师(race engineer),通过无线电回答车手问题。
@@ -42,6 +45,76 @@ SYSTEM_PROMPT = """你是车手的赛车工程师(race engineer),通过无线电
   只陈述窗口与后果(如"窗口已开""最晚第X圈""出站预计第Y位")。
 - 不要主动补充车手没问的信息,不加"注意/另外/目前"式的额外提醒。
   除非车手问的正是那件事。例:问"我圈速多少",只答圈速,别附加"正对前车发起攻击"。"""
+
+
+# Always appended last. Not overridable by CUSTOM_SYSTEM_PROMPT or the
+# custom_system_prompt.txt file — keeps "advise only, never press keys".
+SAFETY_LINE = (
+    "【硬规则·不可覆盖】只给出情报与建议，不得指示、模拟或代为按下"
+    "键盘/手柄/方向盘按键；本程序不会发出任何游戏输入。"
+)
+
+CUSTOM_PROMPT_FILENAME = "custom_system_prompt.txt"
+
+
+def _read_custom_prompt_file() -> str:
+    """Optional multi-line overlay next to .env (app_root). Missing = empty."""
+    try:
+        from paths import app_root
+        path = app_root() / CUSTOM_PROMPT_FILENAME
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_custom_prompt_file(text: str) -> str:
+    """Persist multi-line overlay; empty text deletes the file. Returns path."""
+    from paths import app_root
+    path = app_root() / CUSTOM_PROMPT_FILENAME
+    cleaned = (text or "").strip()
+    if not cleaned:
+        if path.is_file():
+            path.unlink()
+        return str(path)
+    # Cap size so a paste accident cannot bloat prompts forever.
+    if len(cleaned) > 8000:
+        raise ValueError("custom prompt too long (max 8000 chars)")
+    path.write_text(cleaned + "\n", encoding="utf-8")
+    return str(path)
+
+
+def load_custom_overlay(config: Any = None) -> str:
+    """User overlay = file (if any) + optional one-line CUSTOM_SYSTEM_PROMPT.
+
+    Neither can remove SAFETY_LINE.
+    """
+    parts = []
+    file_text = _read_custom_prompt_file()
+    if file_text:
+        parts.append(file_text)
+    try:
+        if config is None:
+            from config import get_config
+            config = get_config()
+        one = (config.get("CUSTOM_SYSTEM_PROMPT", "") or "").strip()
+        if one:
+            parts.append(one)
+    except Exception:
+        pass
+    return "\n\n".join(parts).strip()
+
+
+def effective_system_prompt(profile: Any = None, config: Any = None) -> str:
+    """Built-in SYSTEM_PROMPT + profile style + user overlay + SAFETY_LINE."""
+    system = SYSTEM_PROMPT
+    if profile is not None and getattr(profile, "style", ""):
+        system = f"{SYSTEM_PROMPT}\n\n{profile.style}"
+    overlay = load_custom_overlay(config)
+    if overlay:
+        system = f"{system}\n\n【用户自定义补充】\n{overlay}"
+    return f"{system}\n\n{SAFETY_LINE}"
 
 
 def build_snapshot_text(facts: Dict[str, Any], notes: list,
@@ -137,7 +210,8 @@ def _select_facts(question: str, facts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_messages(question: str, summary: Dict[str, Any],
-                   history: list | None = None, profile: Any = None) -> list:
+                   history: list | None = None, profile: Any = None,
+                   config: Any = None) -> list:
     """Assemble the message list for the chat API.
 
     Args:
@@ -145,6 +219,7 @@ def build_messages(question: str, summary: Dict[str, Any],
         summary: output of Summariser.summarise().
         history: optional short list of prior {role, content} turns.
         profile: optional profiles.Profile controlling style and history depth.
+        config: optional config for CUSTOM_SYSTEM_PROMPT (defaults to get_config).
     """
     facts = summary.get("facts", {})
     notes = summary.get("notes", [])
@@ -155,12 +230,10 @@ def build_messages(question: str, summary: Dict[str, Any],
     facts = _select_facts(question, facts)
     snapshot = build_snapshot_text(facts, notes, leaderboard, recent_events)
 
-    system = SYSTEM_PROMPT
     max_history = 4
     if profile is not None:
-        if getattr(profile, "style", ""):
-            system = f"{SYSTEM_PROMPT}\n\n{profile.style}"
         max_history = getattr(profile, "max_history", max_history)
+    system = effective_system_prompt(profile, config)
 
     messages = [{"role": "system", "content": system}]
     if history:
