@@ -93,7 +93,7 @@ class RaceModelState:
     behind: Optional[GapTrend] = None
     pit_window: Optional[PitWindow] = None
     tyre_laps_to_limit: Optional[float] = None
-    fuel_laps_left: Optional[float] = None
+    race_laps_remaining: Optional[float] = None  # session laps to go (not fuel range)
     rain_eta_min: Optional[float] = None
     field_best_lap_ms: Optional[int] = None
     pole_lap_ms: Optional[int] = None

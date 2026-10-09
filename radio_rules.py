@@ -422,11 +422,36 @@ def _rule_fastest_lap_you(ctx: RuleCtx) -> Optional[Alert]:
     return None
 
 
+def _retirement_display_name(ctx: RuleCtx, ev: dict) -> str:
+    """Prefer the event's resolved driver name over car{idx}."""
+    name = (ev.get("driver") or "").strip()
+    if name and not name.startswith("car"):
+        return name
+    idx = ev.get("vehicle_idx")
+    lb = ctx.snapshot.get("leaderboard") or []
+    for r in lb:
+        if r.get("car_index") == idx and r.get("driver"):
+            return str(r["driver"])
+    if idx is not None and ctx.names is not None:
+        try:
+            # Participants map is not on the snapshot; name_from_index falls
+            # back to the seed table / carN when the map is empty.
+            rendered = ctx.names.name_from_index(int(idx), {})
+            if rendered:
+                return rendered
+        except Exception:  # noqa: BLE001
+            pass
+    if name:
+        return name
+    return f"car{idx}"
+
+
 def _rule_retirement_other(ctx: RuleCtx) -> Optional[Alert]:
     rule = _RULES["retirement_other"]
     for ev in ctx.new_events:
         if ev.get("kind") == "retirement" and not ev.get("is_player"):
-            return _alert(rule, T.render("retirement_other", name=f"car{ev.get('vehicle_idx')}"),
+            name = _retirement_display_name(ctx, ev)
+            return _alert(rule, T.render("retirement_other", name=name),
                           ctx.now, f"retire_{ev.get('vehicle_idx')}")
     return None
 

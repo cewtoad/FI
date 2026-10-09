@@ -129,16 +129,17 @@ class RaceModel:
         if stint is not None and stint.projected_life_laps is not None:
             tyre_laps_to_limit = max(0.0, stint.projected_life_laps)
 
-        fuel_laps_left = None
+        # Session laps remaining (NOT oil/fuel range). Only computed when the
+        # fuel recommender has data so we know we are in a proper race stint;
+        # value itself is total - cur + 1 (same convention as
+        # summariser.facts.laps_remaining). Kept off the fuel.* namespace so the
+        # LLM never confuses race distance with tank range.
+        race_laps_remaining = None
         surplus = fuel.get("surplus_laps")
         if isinstance(surplus, (int, float)) and session.get("total_laps"):
             cur = lap.get("current_lap_num")
             if isinstance(cur, int):
-                # Same laps-remaining convention as summariser.laps_remaining
-                # (total - cur + 1, includes the lap being driven): the LLM and
-                # radio templates must never see two "laps left" numbers that
-                # disagree by one.
-                fuel_laps_left = max(0, session["total_laps"] - cur + 1)
+                race_laps_remaining = max(0, session["total_laps"] - cur + 1)
 
         field_best, pole = self._field_best(snap)
         tt = latest.get("time_trial", {}) or {}
@@ -161,7 +162,7 @@ class RaceModel:
             behind=behind,
             pit_window=pit_window,
             tyre_laps_to_limit=tyre_laps_to_limit,
-            fuel_laps_left=fuel_laps_left,
+            race_laps_remaining=race_laps_remaining,
             rain_eta_min=rain_eta,
             field_best_lap_ms=field_best,
             pole_lap_ms=pole,

@@ -7,6 +7,10 @@ Usage:
     py -3.12 run.py --port 20777 --json          # dump raw JSON instead of panel
 
 Press Ctrl+C to stop.
+
+Console and web both assemble through ``app.build_app`` so radio / race-model
+/ ticker stay consistent. Console is still a slim panel (no LLM Q&A UI); it
+just no longer bypasses the composition root.
 """
 
 from __future__ import annotations
@@ -18,10 +22,9 @@ import logging
 import sys
 from typing import Optional
 
+from app import build_app
 from console_ui import ConsoleUI
-from receiver import (DEFAULT_PORT, PACKETS_CONSUMED, TelemetryReceiver)
-from state import TelemetryState
-from summariser import Summariser
+from receiver import DEFAULT_PORT
 
 
 def _setup_logging(verbose: bool) -> logging.Logger:
@@ -33,40 +36,38 @@ def _setup_logging(verbose: bool) -> logging.Logger:
     return logging.getLogger("f1_tr")
 
 
-async def _panel_loop(state: TelemetryState, receiver: TelemetryReceiver,
-                      args: argparse.Namespace) -> None:
-    summariser = Summariser()
+async def _panel_loop(app, args: argparse.Namespace) -> None:
     ui = ConsoleUI(mode=args.mode)
     while True:
         await asyncio.sleep(args.interval)
-        snap = state.snapshot()
-        summary = summariser.summarise(snap)
+        snap = app.state.snapshot()
+        summary = app.summariser.summarise(snap)
         if args.json:
-            print(json.dumps({"summary": summary, "stats": receiver.stats()},
+            print(json.dumps({"summary": summary, "stats": app.receiver.stats()},
                              indent=2, ensure_ascii=False, default=str), flush=True)
         else:
-            ui.render(summary, receiver.stats(), connected=receiver.frames > 0)
+            ui.render(summary, app.receiver.stats(),
+                      connected=app.receiver.frames > 0)
 
 
 async def _main(args: argparse.Namespace) -> None:
     logger = _setup_logging(args.verbose)
-    state = TelemetryState(error_logger=logger)
-    # Every packet type TelemetryState consumes, regardless of --mode: the
-    # mode is a *reading* concern (ConsoleUI label), and both modes' needs are
-    # covered by the consumed set. Unconsumed types are dropped after a header
-    # parse only.
-    interested = PACKETS_CONSUMED
-    receiver = TelemetryReceiver(
-        state,
-        port=args.port,
-        bind_ip=args.bind_ip,
-        interested=interested,
-        logger=logger,
-    )
-    logger.info("Mode=%s  packets=%s", args.mode, sorted(str(p) for p in interested))
-    tasks = [asyncio.create_task(receiver.run())]
-    tasks.append(asyncio.create_task(_panel_loop(state, receiver, args)))
-    await asyncio.gather(*tasks)
+    # Console shares the composition root with web/voice so radio + race model
+    # are present. recording=False: the console panel is a live view, not a
+    # session capture entry point (web/voice handle that).
+    app = build_app(port=args.port, bind_ip=args.bind_ip, logger=logger,
+                    recording=False, mode="console")
+    app.start_background()
+    logger.info("Mode=%s (console via build_app) radio=%s race_model=%s",
+                args.mode, app.radio is not None, app.race_model is not None)
+    try:
+        tasks = [
+            asyncio.create_task(app.receiver.run()),
+            asyncio.create_task(_panel_loop(app, args)),
+        ]
+        await asyncio.gather(*tasks)
+    finally:
+        app.shutdown()
 
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
