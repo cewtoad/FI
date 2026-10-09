@@ -178,7 +178,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
             app.state.add_snapshot_provider(lambda: {"race_model": state_dict()})
         app.race_model = race_model
     except Exception as e:  # noqa: BLE001
-        logger.debug("race model unavailable: %r", e)
+        logger.warning("race model unavailable: %r", e)
 
     # Radio director (T5). Optional. Its AlertSink differs by mode.
     try:
@@ -191,7 +191,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
                               config=get_config())
         app.radio = radio
     except Exception as e:  # noqa: BLE001
-        logger.debug("radio director unavailable: %r", e)
+        logger.warning("radio director unavailable: %r", e)
 
     # Speech arbiter: only for voice mode (web mode uses the AlertLog only).
     if app.mode == "voice":
@@ -226,7 +226,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
                                        gate_max_wait=gate_max_wait, fx=fx,
                                        clock=time.monotonic, logger=logger)
         except Exception as e:  # noqa: BLE001
-            logger.debug("speech arbiter unavailable: %r", e)
+            logger.warning("speech arbiter unavailable: %r", e)
 
     # Ticker: drives race model + radio director every beat. Config hot-reload.
     ticker = Ticker(rate_hz=2.0,
@@ -267,7 +267,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
         from debrief import DebriefWriter
         app.extras["debrief"] = DebriefWriter(config=get_config(), logger=logger)
     except Exception as e:  # noqa: BLE001
-        logger.debug("debrief writer unavailable: %r", e)
+        logger.warning("debrief writer unavailable: %r", e)
     app.ticker = ticker
 
 

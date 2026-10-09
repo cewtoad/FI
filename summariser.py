@@ -154,8 +154,8 @@ class Summariser:
         # Laps remaining (T1.2): only meaningful when the session has a lap
         # count. Includes the lap being driven (standard race-engineer usage:
         # "5 laps to go" while on lap N of M means M-N+1). The race model's
-        # fuel.laps_to_end uses the SAME convention, so the LLM never sees two
-        # "laps left" numbers that disagree by one.
+        # race_laps_remaining uses the SAME convention (and is NOT exposed
+        # under fuel.* — tank range is the flat fact fuel_laps_left).
         if isinstance(total_laps, int) and total_laps > 0 \
                 and isinstance(current_lap, int) and current_lap > 0:
             facts["laps_remaining"] = max(0, total_laps - current_lap + 1)
@@ -281,11 +281,12 @@ class Summariser:
             facts["pit.ideal_lap"] = pw.get("ideal_lap")
             facts["pit.latest_lap"] = pw.get("latest_lap")
             facts["pit.rejoin_position"] = pw.get("rejoin_position")
-        if rm.get("fuel_laps_left") is not None:
-            # race laps remaining (NOT the telemetry fuel range, which is the
-            # flat fact "fuel_laps_left"); keep the names distinct so the LLM
-            # never sees two contradictory "laps left" values.
-            facts["fuel.laps_to_end"] = rm.get("fuel_laps_left")
+        # Race distance remaining lives only as flat facts["laps_remaining"]
+        # (set above). Do NOT mirror race_model.race_laps_remaining under
+        # fuel.* — that namespace is reserved for tank/oil range
+        # (fuel_laps_left / fuel_surplus_laps / ...).
+        if facts.get("laps_remaining") is None and rm.get("race_laps_remaining") is not None:
+            facts["laps_remaining"] = rm.get("race_laps_remaining")
         if rm.get("rain_eta_min") is not None:
             facts["weather.rain_eta_min"] = rm.get("rain_eta_min")
         if rm.get("field_best_lap_ms") is not None:

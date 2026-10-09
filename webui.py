@@ -1297,7 +1297,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, got)
 
     def _ask_voice(self) -> None:
-        """POST /api/ask_voice - raw audio body -> {question, answer, audio}."""
+        """POST /api/ask_voice - raw audio body -> {question, answer, audio}.
+
+        Shares ``_ASK_SEMAPHORE`` with ``/api/ask`` so text and voice cannot
+        run two engineer turns at once (history would interleave).
+        """
         ctx = self.server.ctx  # type: ignore[attr-defined]
         voice: VoiceLink = ctx["voice"]
         if not voice.available:
@@ -1324,25 +1328,32 @@ class _Handler(BaseHTTPRequestHandler):
             return
         audio = self.rfile.read(length)
         mime = (self.headers.get("Content-Type") or "audio/webm").split(";")[0].strip()
-        try:
-            result = voice.process(audio, mime)
-        except Exception as e:  # noqa: BLE001 - answer the client, not a dropped conn
-            logging.getLogger("f1_tr.web").warning("voice.process failed: %r", e)
-            self._send(500, json.dumps({"error": f"voice failed: {e}"}).encode("utf-8"),
+        if not _ASK_SEMAPHORE.acquire(blocking=False):
+            self._send(429, json.dumps({"error": "busy, one question at a time"}).encode("utf-8"),
                        "application/json; charset=utf-8")
             return
-        # Persist the Q&A turn exactly like /api/ask does.
-        if result.get("question") is not None and result.get("answer") is not None:
+        try:
             try:
-                rec = ctx.get("recorder")
-                if rec is not None:
-                    eng = ctx.get("engineer")
-                    usage = getattr(eng, "last_usage", None)
-                    rec.record_qa(result["question"], result["answer"], usage)
-            except Exception:
-                pass
-        self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"),
-                   "application/json; charset=utf-8")
+                result = voice.process(audio, mime)
+            except Exception as e:  # noqa: BLE001 - answer the client, not a dropped conn
+                logging.getLogger("f1_tr.web").warning("voice.process failed: %r", e)
+                self._send(500, json.dumps({"error": f"voice failed: {e}"}).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            # Persist the Q&A turn exactly like /api/ask does.
+            if result.get("question") is not None and result.get("answer") is not None:
+                try:
+                    rec = ctx.get("recorder")
+                    if rec is not None:
+                        eng = ctx.get("engineer")
+                        usage = getattr(eng, "last_usage", None)
+                        rec.record_qa(result["question"], result["answer"], usage)
+                except Exception:
+                    pass
+            self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"),
+                       "application/json; charset=utf-8")
+        finally:
+            _ASK_SEMAPHORE.release()
 
 
 def _receiver_thread(receiver: TelemetryReceiver, logger) -> None:

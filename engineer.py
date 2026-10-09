@@ -62,7 +62,9 @@ class Engineer:
         self.last_usage: Optional[Dict[str, Any]] = None
         self.last_source: str = "none"  # "local" | "llm"
         self._lock = threading.Lock()
-        self._busy = threading.Event()
+        # Serialises ask / history so web text + web voice (and any other
+        # caller) cannot interleave turns on the shared history list.
+        self._ask_lock = threading.Lock()
         self._cancel = threading.Event()
 
     # ------------------------------------------------------------ client
@@ -132,7 +134,15 @@ class Engineer:
 
         ``channel`` only affects the no-key hint wording (web vs voice); the
         local fast path always runs first, regardless of key.
+
+        Asks are serialised on ``_ask_lock`` so concurrent callers (web text,
+        web voice, in-game voice) cannot interleave history / last_* fields.
         """
+        with self._ask_lock:
+            return self._ask_unlocked(question, snapshot, channel)
+
+    def _ask_unlocked(self, question: str, snapshot: Dict[str, Any],
+                      channel: str) -> str:
         self.last_error = None
         self._cancel.clear()
         profile = get_profile(self.profile_name)
@@ -162,7 +172,10 @@ class Engineer:
             self.last_source = "no-key"
             return unconfigured_hint(channel)
 
-        messages = build_messages(question, summary, self.history, profile)
+        # Snapshot history under the ask lock (already held) so the message
+        # list is a stable copy for this turn.
+        history_snap = list(self.history)
+        messages = build_messages(question, summary, history_snap, profile)
         try:
             answer = client.chat(messages,
                                  temperature=0.3,
@@ -185,9 +198,11 @@ class Engineer:
         return answer
 
     def _remember(self, question: str, answer: str, profile) -> None:
+        # Caller must hold _ask_lock (ask path).
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
         self.history = self.history[-profile.max_history:]
 
     def reset(self) -> None:
-        self.history.clear()
+        with self._ask_lock:
+            self.history.clear()
