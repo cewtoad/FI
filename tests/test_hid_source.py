@@ -1,6 +1,6 @@
 """HidSource unit tests (offline; synthetic DualSense USB reports).
 
-The real device was measured 2026-10-02 (see KNOWN_ISSUES "输入触发方式"):
+The real device was measured 2026-10-02 (DualSense USB HID layout in inputs/hid.py):
 input report 0x01, 64 bytes, R1 = byte 9 mask 0x02, Cross = byte 8 mask 0x20.
 These tests lock the edge-detection and dispatch logic; no device required.
 """

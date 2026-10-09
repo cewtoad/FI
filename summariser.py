@@ -11,46 +11,48 @@ Output has two parts:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from contracts import SuggestedAction
 from race_model import TYRE_WEAR_LIMIT_DEFAULT
+from timefmt import fmt_gap, fmt_gap_signed, fmt_ms, fmt_signed_ms
 
+# Back-compat aliases (tests / callers that imported private helpers).
+_fmt_ms = fmt_ms
+_signed = fmt_signed_ms
+_fmt_gap = fmt_gap
+_fmt_gap_signed = fmt_gap_signed
 
-def _fmt_ms(ms: Optional[int]) -> str:
-    if ms is None or ms <= 0:
-        return "-"
-    minutes = ms // 60000
-    rem = ms % 60000
-    seconds = rem // 1000
-    millis = rem % 1000
-    if minutes:
-        return f"{minutes}:{seconds:02d}.{millis:03d}"
-    return f"{seconds}.{millis:03d}"
-
-
-def _signed(ms: Optional[int]) -> str:
-    if ms is None:
-        return "-"
-    return f"+{ms}ms" if ms >= 0 else f"{ms}ms"
-
-
-def _fmt_gap(ms: Optional[int]) -> str:
-    if not ms or ms <= 0:
-        return "-"
-    return f"+{ms/1000:.3f}s"
-
-
-def _fmt_gap_signed(ms: Optional[int]) -> str:
-    """Gap in ms rendered with an explicit direction, e.g. ``落后 19.982s``.
-
-    F1 UDP ``deltaToRaceLeader``/``deltaToCarInFront`` are non-negative for
-    cars behind the reference, so a positive value always means "behind".
-    Spelling the direction out prevents the LLM from reading ``gap_to_leader``
-    as "how far I lead".
-    """
-    if not ms or ms <= 0:
-        return "0.000s"
-    return f"落后 {ms/1000:.3f}s"
+# Named intents for AI / ask path fact slices (fuel / tyres / gaps / pit / weather).
+INTENT_CORE: Tuple[str, ...] = (
+    "lap", "total_laps", "position", "last_lap_time", "best_lap_time",
+    "current_lap_time", "tyre_compound", "tyre_age_laps", "speed_kph",
+    "laps_remaining",
+)
+INTENT_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "tyres": ("tyre", "stint", "pace"),
+    "fuel": ("fuel", "pit", "stint"),
+    "gaps": ("gap", "position"),
+    "pit": ("pit", "fuel", "stint"),
+    "weather": ("weather",),
+    "pace": ("pace", "stint", "qualifying"),
+}
+INTENT_FLAT_PREFIX: Dict[str, Tuple[str, ...]] = {
+    "tyres": ("tyre_",),
+    "fuel": ("fuel_",),
+    "gaps": (),
+    "pit": ("fuel_",),
+    "weather": (),
+    "pace": (),
+}
+QUESTION_INTENT_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("tyres", ("胎", "轮胎", "磨损", "胎温", "stint", "衰退")),
+    ("gaps", ("前车", "后面", "落后", "差距", "追", "超", "名次", "位置", "gap")),
+    ("pit", ("进站", "策略", "油", "窗口", "pit", "fuel", "plan")),
+    ("fuel", ("油量", "剩油", "油耗", "fuel")),
+    ("weather", ("天气", "雨", "weather", "rain")),
+    ("pace", ("排位", "最快圈", "杆位", "quali", "圈速", "节奏")),
+)
 
 
 class Summariser:
@@ -154,8 +156,8 @@ class Summariser:
         # Laps remaining (T1.2): only meaningful when the session has a lap
         # count. Includes the lap being driven (standard race-engineer usage:
         # "5 laps to go" while on lap N of M means M-N+1). The race model's
-        # fuel.laps_to_end uses the SAME convention, so the LLM never sees two
-        # "laps left" numbers that disagree by one.
+        # race_laps_remaining uses the SAME convention (and is NOT exposed
+        # under fuel.* — tank range is the flat fact fuel_laps_left).
         if isinstance(total_laps, int) and total_laps > 0 \
                 and isinstance(current_lap, int) and current_lap > 0:
             facts["laps_remaining"] = max(0, total_laps - current_lap + 1)
@@ -243,12 +245,18 @@ class Summariser:
         else:
             lap_history = [_fmt_ms(x) for x in trends.get("lap_times_ms", [])]
 
+        notes = dedupe_notes(notes)
+        trend_lines = race_model_trend_lines(snap)
+        suggestions = build_suggested_actions(snap, facts)
+
         return {
             "facts": facts,
             "notes": notes,
             "lap_history": lap_history,
             "leaderboard": leaderboard,
             "recent_events": recent_events,
+            "trend_lines": trend_lines,
+            "suggested_actions": [s.to_dict() for s in suggestions],
         }
 
     # ------------------------------------------------------------- note rules
@@ -281,11 +289,12 @@ class Summariser:
             facts["pit.ideal_lap"] = pw.get("ideal_lap")
             facts["pit.latest_lap"] = pw.get("latest_lap")
             facts["pit.rejoin_position"] = pw.get("rejoin_position")
-        if rm.get("fuel_laps_left") is not None:
-            # race laps remaining (NOT the telemetry fuel range, which is the
-            # flat fact "fuel_laps_left"); keep the names distinct so the LLM
-            # never sees two contradictory "laps left" values.
-            facts["fuel.laps_to_end"] = rm.get("fuel_laps_left")
+        # Race distance remaining lives only as flat facts["laps_remaining"]
+        # (set above). Do NOT mirror race_model.race_laps_remaining under
+        # fuel.* — that namespace is reserved for tank/oil range
+        # (fuel_laps_left / fuel_surplus_laps / ...).
+        if facts.get("laps_remaining") is None and rm.get("race_laps_remaining") is not None:
+            facts["laps_remaining"] = rm.get("race_laps_remaining")
         if rm.get("rain_eta_min") is not None:
             facts["weather.rain_eta_min"] = rm.get("rain_eta_min")
         if rm.get("field_best_lap_ms") is not None:
@@ -402,3 +411,168 @@ class Summariser:
         if isinstance(stops, int) and stops > 0:
             out.append(f"已进站 {stops} 次")
         return out
+
+
+# --------------------------------------------------------- intent / trends / advise
+
+def detect_intents(question: str) -> List[str]:
+    """Map a free-text question to zero or more INTENT_GROUPS keys."""
+    q = question or ""
+    q_lower = q.lower()
+    out: List[str] = []
+    for intent, hints in QUESTION_INTENT_HINTS:
+        matched = False
+        for h in hints:
+            if h.isascii():
+                if h.lower() in q_lower:
+                    matched = True
+                    break
+            elif h in q:
+                matched = True
+                break
+        if matched and intent not in out:
+            out.append(intent)
+    return out
+
+
+def slice_facts(facts: Dict[str, Any], intents: Sequence[str] | None = None,
+                question: str | None = None) -> Dict[str, Any]:
+    """Return the fact subset for the given intents (or inferred from question).
+
+    Empty intent list / no match -> full facts (safe default for the LLM).
+    """
+    if not facts:
+        return {}
+    if intents is None:
+        intents = detect_intents(question or "")
+    intents = list(intents or [])
+    if not intents:
+        return dict(facts)
+    prefixes: List[str] = []
+    flat: List[str] = []
+    for intent in intents:
+        for g in INTENT_GROUPS.get(intent, ()):
+            prefixes.append(f"{g}.")
+        flat.extend(INTENT_FLAT_PREFIX.get(intent, ()))
+    if not prefixes and not flat:
+        return dict(facts)
+    pref_t = tuple(prefixes)
+    flat_t = tuple(flat)
+    out: Dict[str, Any] = {}
+    for k, v in facts.items():
+        if k in INTENT_CORE:
+            out[k] = v
+        elif pref_t and k.startswith(pref_t):
+            out[k] = v
+        elif flat_t and k.startswith(flat_t):
+            out[k] = v
+    return out or dict(facts)
+
+
+def dedupe_notes(notes: List[str]) -> List[str]:
+    """Drop exact duplicates (whitespace-normalised); keep first spelling."""
+    seen: set = set()
+    out: List[str] = []
+    for n in notes or []:
+        key = (n or "").strip()
+        if not key:
+            continue
+        norm = " ".join(key.split())
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(key)
+    return out
+
+
+def race_model_trend_lines(snap: Dict[str, Any]) -> List[str]:
+    """One-liners from race_model for radio / ask (no raw dict dump)."""
+    rm = snap.get("race_model") or {}
+    if not rm:
+        return []
+    lines: List[str] = []
+    stint = rm.get("stint") or {}
+    if stint.get("pace_degradation_s_per_lap") is not None:
+        deg = float(stint["pace_degradation_s_per_lap"])
+        if abs(deg) >= 0.01:
+            lines.append(f"胎面衰退约 {deg:.3f} 秒/圈")
+    if rm.get("tyre_laps_to_limit") is not None:
+        lines.append(
+            f"轮胎预计还能跑 {float(rm['tyre_laps_to_limit']):.0f} 圈到磨损上限")
+    ahead = rm.get("ahead") or {}
+    if ahead.get("closing_rate_ms_per_lap") is not None:
+        rate = float(ahead["closing_rate_ms_per_lap"])
+        if abs(rate) >= 20:
+            verb = "追近" if rate > 0 else "被拉开"
+            lines.append(f"对前车每圈{verb}约 {abs(rate):.0f}ms")
+        if ahead.get("laps_to_1s") is not None and float(ahead["laps_to_1s"]) <= 5:
+            lines.append(f"约 {float(ahead['laps_to_1s']):.1f} 圈可进 1 秒区间")
+    pw = rm.get("pit_window") or {}
+    state = pw.get("state")
+    if state and state not in ("unknown", "done", "not_open"):
+        ideal = pw.get("ideal_lap")
+        latest = pw.get("latest_lap")
+        bit = f"进站窗口 {state}"
+        if ideal is not None:
+            bit += f"，理想第 {ideal} 圈"
+        if latest is not None:
+            bit += f"，最晚第 {latest} 圈"
+        lines.append(bit)
+    if rm.get("rain_eta_min") is not None:
+        lines.append(f"预计约 {float(rm['rain_eta_min']):.0f} 分钟后降雨")
+    if rm.get("field_best_lap_ms"):
+        lines.append(f"场上最快圈 {fmt_ms(rm.get('field_best_lap_ms'))}")
+    return lines
+
+
+def build_suggested_actions(snap: Dict[str, Any],
+                            facts: Optional[Dict[str, Any]] = None
+                            ) -> List[SuggestedAction]:
+    """Advise-only actions for HUD / radio. Never encodes a pressable binding."""
+    facts = facts or {}
+    actions: List[SuggestedAction] = []
+    rm = snap.get("race_model") or {}
+    pw = rm.get("pit_window") or {}
+    state = pw.get("state")
+    if state in ("open", "last_lap"):
+        ideal = pw.get("ideal_lap")
+        latest = pw.get("latest_lap")
+        bits = []
+        if ideal is not None:
+            bits.append(f"理想第 {ideal} 圈")
+        if latest is not None:
+            bits.append(f"最晚第 {latest} 圈")
+        detail = "，".join(bits) if bits else state
+        actions.append(SuggestedAction(
+            text=f"进站窗口已开（{detail}）；由你自行决定是否进站",
+            suggested_key_name="进站确认",
+        ))
+    car2 = (snap.get("latest") or {}).get("car2") or {}
+    ov_avail = facts.get("overtake_available")
+    if ov_avail is None:
+        ov_avail = car2.get("overtake_available")
+    ov_active = facts.get("overtake_active")
+    if ov_active is None:
+        ov_active = car2.get("overtake_active")
+    if ov_avail and not ov_active:
+        actions.append(SuggestedAction(
+            text="Overtake 可用；需要时由你自行开启",
+            suggested_key_name="Overtake",
+        ))
+    ahead = rm.get("ahead") or {}
+    gap_ms = ahead.get("gap_ms_now")
+    if isinstance(gap_ms, (int, float)) and 0 < gap_ms < 1000:
+        actions.append(SuggestedAction(
+            text=f"已进入追击范围（前车差 {fmt_gap(int(gap_ms))}）",
+            suggested_key_name="DRS/Active Aero",
+        ))
+    return actions
+
+
+def summarise_for_ask(snap: Dict[str, Any], question: str = "",
+                      config: Any = None) -> Dict[str, Any]:
+    """Full summarise + intent-sliced facts for the LLM ask path."""
+    summary = Summariser(config=config).summarise(snap)
+    summary["facts"] = slice_facts(summary.get("facts") or {},
+                                   question=question)
+    return summary

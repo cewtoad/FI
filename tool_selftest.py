@@ -183,6 +183,27 @@ def _audio_player():
     return f"beep={len(beep)}B, wav 解码 OK"
 
 
+@check("组装根 build_app（电台/推演）")
+def _pipeline():
+    from app import build_app
+    application = build_app(port=0, recording=False, mode="web", logger=None)
+    missing = []
+    if application.race_model is None:
+        missing.append("race_model")
+    if application.radio is None:
+        missing.append("radio")
+    if application.ticker is None:
+        missing.append("ticker")
+    try:
+        application.shutdown()
+    except Exception:
+        pass
+    if missing:
+        raise RuntimeError("缺失: " + ", ".join(missing))
+    return "race_model+radio+ticker 就绪"
+
+
+
 def main() -> int:
     print("=" * 52)
     print("  F1 Race Engineer  整体自检")

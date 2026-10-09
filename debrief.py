@@ -16,17 +16,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from timefmt import fmt_ms as _fmt_ms
+
 _log = logging.getLogger("f1_tr.debrief")
 
 _END_KINDS = {"chequered", "session_ended"}
 
 
-def _fmt_ms(ms) -> str:
-    if not isinstance(ms, int) or ms <= 0:
-        return "-"
-    m, rem = divmod(ms, 60000)
-    s, milli = divmod(rem, 1000)
-    return f"{m}:{s:02d}.{milli:03d}" if m else f"{s}.{milli:03d}"
 
 
 def _stints(samples: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:

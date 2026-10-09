@@ -2,6 +2,10 @@
 
 Replaces pits-n-giggles' AsyncF1TelemetryManager + backend multi-process stack
 with a small asyncio loop that drives the parser factory directly.
+
+The default ``TelemetrySource`` (see ``telemetry_source.UdpTelemetrySource``)
+wraps this class. New feeds plug in at that adapter — do not add memory-read
+or injection paths here.
 """
 
 from __future__ import annotations

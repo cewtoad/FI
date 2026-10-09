@@ -91,6 +91,8 @@ _VK_SPECIAL = {
 }
 
 _DUALSENSE = (0x054C, 0x0CE6)
+# VIDs treated as steering wheels in UI labels (read-only PTT).
+WHEEL_VIDS = frozenset({0x046D, 0x044F, 0x0EB7, 0x11FF, 0x0483, 0x294B})
 _XI_NAMES = {  # XInput button -> (zh, en)
     "a": ("A 键", "A"), "b": ("B 键", "B"), "x": ("X 键", "X"), "y": ("Y 键", "Y"),
     "lb": ("LB 左肩键", "LB"), "rb": ("RB 右肩键", "RB"),
@@ -145,6 +147,8 @@ def describe_binding(binding: str, lang: str = "zh") -> str:
             else f"Keyboard {_vk_name(desc['vk'], lang)}"
     if desc["type"] == "xi" or desc.get("vid") == 0x045E:
         pad = "Xbox 手柄" if zh else "Xbox controller"
+    elif desc.get("vid") in WHEEL_VIDS:
+        pad = "方向盘" if zh else "Wheel"
     else:
         pad = "手柄" if zh else "Gamepad"
     if desc["type"] == "xi":

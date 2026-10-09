@@ -952,7 +952,8 @@ class TelemetryState:
         is_player = veh == self.player_car_index
         text = f"{'你' if is_player else who}退赛"
         self._add_event("retirement", veh, None, text,
-                        extra={"vehicle_idx": veh, "is_player": is_player})
+                        extra={"vehicle_idx": veh, "is_player": is_player,
+                               "driver": who})
 
     def _on_event_dt_served(self, details) -> None:
         veh = getattr(details, "vehicleIdx", None)

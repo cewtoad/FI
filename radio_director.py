@@ -265,7 +265,7 @@ class _EmptyModel:
     behind = None
     pit_window = None
     tyre_laps_to_limit = None
-    fuel_laps_left = None
+    race_laps_remaining = None
     rain_eta_min = None
     field_best_lap_ms = None
     pole_lap_ms = None

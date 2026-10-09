@@ -148,6 +148,13 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
     engineer = Engineer()
     app = App(state=state, receiver=receiver, summariser=Summariser(),
               engineer=engineer, recorder=recorder, mode=mode)
+    # P2: explicit TelemetrySource adapter (default UDP). Hot-pluggable later;
+    # build_app still owns the concrete TelemetryReceiver for existing callers.
+    try:
+        from telemetry_source import UdpTelemetrySource
+        app.extras["telemetry_source"] = UdpTelemetrySource(receiver)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("telemetry source adapter unavailable: %r", e)
     if raw_fh is not None:
         app.extras["raw_file"] = str(raw_file)
         app.extras["raw_fh"] = raw_fh
@@ -178,7 +185,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
             app.state.add_snapshot_provider(lambda: {"race_model": state_dict()})
         app.race_model = race_model
     except Exception as e:  # noqa: BLE001
-        logger.debug("race model unavailable: %r", e)
+        logger.warning("race model unavailable: %r", e)
 
     # Radio director (T5). Optional. Its AlertSink differs by mode.
     try:
@@ -191,7 +198,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
                               config=get_config())
         app.radio = radio
     except Exception as e:  # noqa: BLE001
-        logger.debug("radio director unavailable: %r", e)
+        logger.warning("radio director unavailable: %r", e)
 
     # Speech arbiter: only for voice mode (web mode uses the AlertLog only).
     if app.mode == "voice":
@@ -226,7 +233,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
                                        gate_max_wait=gate_max_wait, fx=fx,
                                        clock=time.monotonic, logger=logger)
         except Exception as e:  # noqa: BLE001
-            logger.debug("speech arbiter unavailable: %r", e)
+            logger.warning("speech arbiter unavailable: %r", e)
 
     # Ticker: drives race model + radio director every beat. Config hot-reload.
     ticker = Ticker(rate_hz=2.0,
@@ -267,7 +274,7 @@ def _assemble_pipeline(app: "App", logger, tts_engine=None,
         from debrief import DebriefWriter
         app.extras["debrief"] = DebriefWriter(config=get_config(), logger=logger)
     except Exception as e:  # noqa: BLE001
-        logger.debug("debrief writer unavailable: %r", e)
+        logger.warning("debrief writer unavailable: %r", e)
     app.ticker = ticker
 
 
@@ -299,11 +306,17 @@ def _make_alert_sink(app: "App", logger):
     app.extras["alert_log"] = log
 
     def _log_sink(alert):
-        log.append({
+        entry = {
             "id": alert.id, "category": alert.category,
             "priority": alert.priority, "text": alert.text,
             "created_at": alert.created_at,
-        })
+        }
+        # P2: advise-only key NAME for HUD (never a binding FI will press).
+        meta = getattr(alert, "meta", None) or {}
+        sa = meta.get("suggested_action")
+        if sa:
+            entry["suggested_action"] = sa
+        log.append(entry)
     return _log_sink
 
 
