@@ -100,6 +100,27 @@ class RaceModelState:
     flags: Dict[str, Any] = field(default_factory=dict)
 
 
+# ------------------------------------------------------- suggested actions
+
+@dataclass(frozen=True)
+class SuggestedAction:
+    """Advise-only cue for radio / HUD. FI never emits the named key.
+
+    ``suggested_key_name`` is a human label the driver may bind in-game
+    (e.g. "进站确认", "Overtake"), never a HID/XInput binding string and
+    never something this process will press, inject, or write to a device.
+    """
+
+    text: str
+    suggested_key_name: str = ""
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "text": self.text,
+            "suggested_key_name": self.suggested_key_name or "",
+        }
+
+
 # -------------------------------------------------------------- voice packs
 
 @dataclass(frozen=True)

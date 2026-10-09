@@ -525,9 +525,19 @@ function renderFacts(facts){
   if (facts.tyre_temp_c) html += `<div class="row"><span class="k">${LANG==='en'?'Tyre °C (FL FR RL RR)':'胎温(FL FR RL RR)'}</span><span class="v">${esc(facts.tyre_temp_c.join(" / "))}</span></div>`;
   el.innerHTML = html || `<div class='k'>${LANG==='en'?'no data':'暂无数据'}</div>`;
 }
-function renderNotes(notes){
+function renderNotes(notes, trendLines, suggestedActions){
   const el = document.getElementById("notes");
-  el.innerHTML = (notes||[]).map(n=>`<div class="note">${esc(n)}</div>`).join("");
+  let html = (notes||[]).map(n=>`<div class="note">${esc(n)}</div>`).join("");
+  for (const tline of (trendLines||[])){
+    html += `<div class="note" style="color:#9cf;">${esc(tline)}</div>`;
+  }
+  for (const a of (suggestedActions||[])){
+    const key = a.suggested_key_name
+      ? ` <span style="color:#9bb;">[${esc(a.suggested_key_name)} · ${LANG==='en'?'advise only':'仅建议'}]</span>`
+      : "";
+    html += `<div class="note" style="border-left:2px solid #ffb020;padding-left:6px;">${esc(a.text||"")}${key}</div>`;
+  }
+  el.innerHTML = html;
 }
 function renderBoard(rows){
   const el = document.getElementById("board");
@@ -548,12 +558,20 @@ function renderAlerts(alerts){
   const recent = alerts.slice(-4).reverse();
   const color = p => p === 0 ? "#ff5c5c" : (p === 1 ? "#ffb020" : "#7ab8ff");
   el.style.display = "";
-  el.innerHTML = recent.map(a =>
-    `<div style="border-left:3px solid ${color(a.priority)};background:#101f2e;`+
+  el.innerHTML = recent.map(a => {
+    const sa = a.suggested_action || {};
+    const keyHint = sa.suggested_key_name
+      ? `<div style="color:#9bb;font-size:11px;margin-top:2px;">`+
+        `${LANG==='en'?'Advise only — related in-game key:':'仅建议 — 相关游戏内按键：'}`+
+        `${esc(sa.suggested_key_name)}`+
+        ` (${LANG==='en'?'FI never presses it':'程序不会代按'})</div>`
+      : "";
+    return `<div style="border-left:3px solid ${color(a.priority)};background:#101f2e;`+
     `padding:6px 10px;margin:6px 0;border-radius:6px;font-size:13px;">`+
     `<span style="color:${color(a.priority)};font-weight:700;">${
       a.priority===0?'P0':(a.priority===1?'P1':'P2')}</span> `+
-    `${esc(a.text||"")}</div>`).join("");
+    `${esc(a.text||"")}${keyHint}</div>`;
+  }).join("");
 }
 function addMsg(who, text){
   const log = document.getElementById("log");
@@ -894,7 +912,7 @@ async function poll(){
     const d = await r.json();
     const sm = d.summary;
     renderFacts(sm.facts);
-    renderNotes(sm.notes);
+    renderNotes(sm.notes, sm.trend_lines, sm.suggested_actions);
     renderBoard(sm.leaderboard);
     renderAlerts(d.alerts || []);
   const conn = document.getElementById("conn");

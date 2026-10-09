@@ -10,20 +10,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-
-def _fmt_ms(ms) -> str:
-    if not ms or ms <= 0:
-        return "-"
-    ms = int(ms)
-    m = ms // 60000
-    r = ms % 60000
-    return f"{m}:{r//1000:02d}.{r%1000:03d}" if m else f"{r/1000:.3f}"
+from timefmt import fmt_gap as _gap, fmt_ms as _fmt_ms
 
 
-def _gap(ms) -> str:
-    if not ms or ms <= 0:
-        return "-"
-    return f"+{ms/1000:.3f}s"
 
 
 def _r(v, nd: int = 1):

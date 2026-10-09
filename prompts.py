@@ -119,11 +119,15 @@ def effective_system_prompt(profile: Any = None, config: Any = None) -> str:
 
 def build_snapshot_text(facts: Dict[str, Any], notes: list,
                         leaderboard: list | None = None,
-                        recent_events: list | None = None) -> str:
+                        recent_events: list | None = None,
+                        trend_lines: list | None = None,
+                        suggested_actions: list | None = None) -> str:
     """Render the compact fact dict + notes + leaderboard into a small text block.
 
     Kept deliberately dense to minimise prompt tokens. The leaderboard is capped
     to the top few plus the player's neighbourhood to bound token cost.
+    ``trend_lines`` / ``suggested_actions`` are optional P2 enrichments (advise
+    only — suggested key names are labels, never bindings to press).
     """
     lines = ["【当前遥测数据】"]
     for k, v in facts.items():
@@ -134,10 +138,27 @@ def build_snapshot_text(facts: Dict[str, Any], notes: list,
         lines.append("【最近事件】(按时间顺序,最后一条最新)")
         for e in recent_events[-3:]:
             lines.append(f"- {e}")
+    if trend_lines:
+        lines.append("【推演】")
+        for t in trend_lines:
+            lines.append(f"- {t}")
     if notes:
         lines.append("【提示】")
         for n in notes:
             lines.append(f"- {n}")
+    if suggested_actions:
+        lines.append("【建议动作】(仅建议，程序不会代按)")
+        for a in suggested_actions:
+            if isinstance(a, dict):
+                text_a = a.get("text") or ""
+                key = a.get("suggested_key_name") or ""
+            else:
+                text_a = getattr(a, "text", "") or ""
+                key = getattr(a, "suggested_key_name", "") or ""
+            if key:
+                lines.append(f"- {text_a}（相关键名：{key}）")
+            elif text_a:
+                lines.append(f"- {text_a}")
     if leaderboard:
         lines.append("【全场排名】(格式:P 车手 轮胎 该车落后领先者的秒数)")
         for row in _trim_leaderboard(leaderboard):
@@ -172,41 +193,13 @@ def _trim_leaderboard(leaderboard: list, top: int = 3) -> list:
 
 
 def _select_facts(question: str, facts: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the fact subset relevant to the question's intent (T9).
+    """Return the fact subset relevant to the question's intent (T9 / P2).
 
-    Namespaced prefixes: tyre.*/stint.*/pace.*, gap.*/position.*,
-    pit.*/fuel.*. Matching keeps only those namespaces plus the always-useful
-    core (lap/position/compound). No match -> full facts (safe default).
+    Delegates to ``summariser.slice_facts`` so ask-path slicing and the
+    summariser stay one implementation.
     """
-    q = (question or "").lower()
-    groups = []
-    # Flat (un-namespaced) fact prefixes to keep for the matched intents.
-    flat = []
-    core = ("lap", "total_laps", "position", "last_lap_time", "best_lap_time",
-            "current_lap_time", "tyre_compound", "tyre_age_laps", "speed_kph")
-    if any(k in q for k in ("胎", "轮胎", "磨损", "胎温", "stint", "衰退")):
-        groups.append(("tyre", "stint", "pace"))
-        flat.append("tyre_")
-    if any(k in q for k in ("前车", "后面", "落后", "差距", "追", "超", "名次", "位置", "gap")):
-        groups.append(("gap", "position"))
-    if any(k in q for k in ("进站", "策略", "油", "窗口", "pit", "fuel", "plan")):
-        groups.append(("pit", "fuel", "stint"))
-        # Flat fuel facts (fuel_kg, fuel_laps_left, fuel_surplus_laps ...) carry
-        # no namespace prefix; keep them so the model can actually answer fuel
-        # questions instead of seeing only the namespaced ones.
-        flat.append("fuel_")
-    if any(k in q for k in ("天气", "雨", "weather", "rain")):
-        groups.append(("weather",))
-    if any(k in q for k in ("排位", "最快圈", "杆位", "quali")):
-        groups.append(("qualifying",))
-    prefixes = tuple(f"{g}." for grp in groups for g in grp)
-    if not prefixes:
-        return facts
-    out = {}
-    for k, v in facts.items():
-        if k in core or k.startswith(prefixes) or k.startswith(tuple(flat)):
-            out[k] = v
-    return out or facts
+    from summariser import slice_facts
+    return slice_facts(facts, question=question)
 
 
 def build_messages(question: str, summary: Dict[str, Any],
@@ -225,10 +218,14 @@ def build_messages(question: str, summary: Dict[str, Any],
     notes = summary.get("notes", [])
     leaderboard = summary.get("leaderboard")
     recent_events = summary.get("recent_events")
-    # T9: pick only the fact namespaces relevant to the question (cheaper,
+    trend_lines = summary.get("trend_lines")
+    suggested_actions = summary.get("suggested_actions")
+    # T9 / P2: pick only the fact namespaces relevant to the question (cheaper,
     # sharper). Unmatched intents fall back to the full facts.
     facts = _select_facts(question, facts)
-    snapshot = build_snapshot_text(facts, notes, leaderboard, recent_events)
+    snapshot = build_snapshot_text(
+        facts, notes, leaderboard, recent_events,
+        trend_lines=trend_lines, suggested_actions=suggested_actions)
 
     max_history = 4
     if profile is not None:

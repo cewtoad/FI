@@ -219,9 +219,15 @@ def _rule_pit_window_open(ctx: RuleCtx) -> Optional[Alert]:
     if _window_state(ctx.prev) == "open" or _window_state(ctx.curr) != "open":
         return None
     w = ctx.curr.pit_window
+    from contracts import SuggestedAction
+    advise = SuggestedAction(
+        text="进站窗口已开；由你自行决定是否进站",
+        suggested_key_name="进站确认",
+    )
     return _alert(rule, T.render("pit_window_open", ideal=w.ideal_lap,
                                  latest=w.latest_lap, rejoin=w.rejoin_position),
-                  ctx.now, _lap_key(ctx, "pit_window_open"))
+                  ctx.now, _lap_key(ctx, "pit_window_open"),
+                  meta={"suggested_action": advise.to_dict()})
 
 
 def _rule_pit_window_warn(ctx: RuleCtx) -> Optional[Alert]:
@@ -251,8 +257,14 @@ def _rule_pit_window_last(ctx: RuleCtx) -> Optional[Alert]:
     if _window_state(ctx.prev) == "last_lap" or _window_state(ctx.curr) != "last_lap":
         return None
     w = ctx.curr.pit_window
+    from contracts import SuggestedAction
+    advise = SuggestedAction(
+        text="本圈是进站窗口最后一圈；由你自行决定是否进站",
+        suggested_key_name="进站确认",
+    )
     return _alert(rule, T.render("pit_window_last", latest=w.latest_lap),
-                  ctx.now, _lap_key(ctx, "pit_window_last"))
+                  ctx.now, _lap_key(ctx, "pit_window_last"),
+                  meta={"suggested_action": advise.to_dict()})
 
 
 def _rule_pit_window_missed(ctx: RuleCtx) -> Optional[Alert]:

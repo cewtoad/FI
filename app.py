@@ -148,6 +148,13 @@ def build_app(port: int = DEFAULT_PORT, bind_ip: str = "127.0.0.1",
     engineer = Engineer()
     app = App(state=state, receiver=receiver, summariser=Summariser(),
               engineer=engineer, recorder=recorder, mode=mode)
+    # P2: explicit TelemetrySource adapter (default UDP). Hot-pluggable later;
+    # build_app still owns the concrete TelemetryReceiver for existing callers.
+    try:
+        from telemetry_source import UdpTelemetrySource
+        app.extras["telemetry_source"] = UdpTelemetrySource(receiver)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("telemetry source adapter unavailable: %r", e)
     if raw_fh is not None:
         app.extras["raw_file"] = str(raw_file)
         app.extras["raw_fh"] = raw_fh
@@ -299,11 +306,17 @@ def _make_alert_sink(app: "App", logger):
     app.extras["alert_log"] = log
 
     def _log_sink(alert):
-        log.append({
+        entry = {
             "id": alert.id, "category": alert.category,
             "priority": alert.priority, "text": alert.text,
             "created_at": alert.created_at,
-        })
+        }
+        # P2: advise-only key NAME for HUD (never a binding FI will press).
+        meta = getattr(alert, "meta", None) or {}
+        sa = meta.get("suggested_action")
+        if sa:
+            entry["suggested_action"] = sa
+        log.append(entry)
     return _log_sink
 
 

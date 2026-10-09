@@ -375,7 +375,19 @@ class CaptureScan:
     # VID-level config (any PID): Xbox pads (045E) walk the XInput driver stack,
     # report only on state change (sparse frames) and get tapped quickly.
     # Button layout not hardware-confirmed yet -> keep the generic scan range.
-    KNOWN_VID = {0x045E: {"baseline_s": 0.5, "hold_s": 0.12}}
+    # Common wheel brands (read-only PTT bind via the same generic HID path;
+    # report layouts vary by firmware — probe then bind, never inject):
+    #   046D Logitech, 044F Thrustmaster, 0EB7 Fanatec, 11FF / 0483 Guillemot
+    #   / Thrustmaster variants, 294B Moza (when exposed as Joystick usage).
+    KNOWN_VID = {
+        0x045E: {"baseline_s": 0.5, "hold_s": 0.12},  # Xbox
+        0x046D: {"baseline_s": 0.6, "hold_s": 0.15},  # Logitech (G29/G920/…)
+        0x044F: {"baseline_s": 0.6, "hold_s": 0.15},  # Thrustmaster
+        0x0EB7: {"baseline_s": 0.6, "hold_s": 0.15},  # Fanatec
+        0x11FF: {"baseline_s": 0.6, "hold_s": 0.15},  # Guillemot / wheel hubs
+        0x0483: {"baseline_s": 0.6, "hold_s": 0.15},  # ST / some wheel bases
+        0x294B: {"baseline_s": 0.6, "hold_s": 0.15},  # Moza (when HID joystick)
+    }
     # A held candidate that never releases within this window is a counter/
     # timestamp bit, not a button: blacklist it for this capture and keep
     # scanning (otherwise it would lock the whole capture until timeout).

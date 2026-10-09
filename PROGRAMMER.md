@@ -63,6 +63,45 @@ optional full embedded voice pack). Manifest args come from
 and `RELEASE_SIGNING.md`. Do not invent a second packaging path unless the
 existing script cannot cover the need.
 
+
+## Summariser / ask facts (P2)
+
+- ``summariser.summarise(snap)`` returns ``facts``, ``notes``, ``trend_lines``,
+  ``suggested_actions`` (plus lap_history / leaderboard / recent_events).
+- Intent slices: ``detect_intents`` / ``slice_facts`` / ``summarise_for_ask``.
+  Named intents: ``fuel``, ``tyres``, ``gaps``, ``pit``, ``weather``, ``pace``.
+  ``prompts._select_facts`` delegates here — do not fork a second selector.
+- Lap/gap spelling: ``timefmt.fmt_ms`` / ``fmt_gap`` / ``fmt_gap_signed``
+  (summariser + report_txt + debrief).
+- **SuggestedAction** (``contracts.SuggestedAction``): ``text`` +
+  ``suggested_key_name`` (human label only). Radio may put it on
+  ``Alert.meta["suggested_action"]``; web alert bar / notes show it.
+  **Never** treat the name as a binding to emit.
+
+## TelemetrySource (P2)
+
+- Interface: ``telemetry_source.TelemetrySource``; default
+  ``UdpTelemetrySource`` wrapping ``receiver.TelemetryReceiver``.
+- Factory: ``make_telemetry_source("udp", receiver=...)``.
+- ``app.extras["telemetry_source"]`` is set by ``build_app``.
+- **Field coverage (official F1 UDP only):** session / lap / car telemetry /
+  car status / damage / participants / events / session history / time trial /
+  car telemetry 2 (2026 aero). Not consumed at receive time: motion, setups,
+  tyre sets pack, lobby, lap positions (see ``PACKETS_CONSUMED``).
+- No memory-read source. Unknown factory kinds raise.
+
+## Steering wheel / generic HID (P2, read-only)
+
+- PTT bind path is still ``hid:`` / ``hat:`` via Raw Input subscribe
+  (``inputs/hid.py``). Joystick usage (0x01/0x04) already covers wheels.
+- ``CaptureScan.KNOWN_VID`` includes common wheel VIDs (Logitech / Thrustmaster /
+  Fanatec / …) with slightly longer baseline/hold for paddle taps.
+- ``describe_binding`` labels those VIDs as 方向盘 / Wheel.
+- **Limitations:** report layouts differ by base/firmware; capture is
+  bind-on-release of a **button bit**, not axis mapping; Bluetooth vs USB may
+  differ; Xbox wheels that only speak XInput should use ``xi:`` instead.
+  Read-only — never HID output / force-feedback write / injection.
+
 ## Non-goals (do not implement)
 
 - Any key/gamepad/steering injection (`SendInput`, virtual pads, HID write,
