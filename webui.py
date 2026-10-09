@@ -181,7 +181,7 @@ PAGE = r"""<!doctype html>
     </div>
     <input type="password" id="setSttKey" placeholder="识别 API Key（本地识别不用填）" data-i18n-ph="ai.stt_key" style="display:none;">
     <div style="font-size:12px;color:var(--dim);margin-top:4px;" data-i18n="ai.stt_note">
-      本地模型大小 / 线程在【功能设置】里调；云端识别改动需重启语音模式生效。
+      本地模型大小 / 线程在【全部设置】里调；云端识别改动需重启语音模式生效。
     </div>
     <div class="row2" style="margin-top:6px;">
       <button id="setSave" data-i18n="ai.save">保存并测试连接</button>
@@ -189,7 +189,7 @@ PAGE = r"""<!doctype html>
     <div class="meta" id="setMsg"></div>
   </div>
   <div class="setup" id="featBox" style="display:none">
-    <h2>🎚 <span data-i18n="feat.title">功能设置</span>
+    <h2>🎚 <span data-i18n="feat.title">全部设置</span>
       <a href="#" id="featClose" style="float:right;font-size:12px;font-weight:400;color:var(--dim);text-decoration:none;" data-i18n="common.close">关闭 ✕</a>
     </h2>
     <details class="setupbox">
@@ -224,11 +224,25 @@ PAGE = r"""<!doctype html>
       主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 .env（部分项需重启）。
     </div>
     <div id="featForm" style="margin-top:6px;"></div>
+    <details class="setupbox" id="promptBox">
+      <summary data-i18n="prompt.title">✏️ 自定义 AI 提示词（叠在内置之上）</summary>
+      <div style="font-size:12px;color:var(--dim);margin:6px 0;" data-i18n="prompt.hint">
+        多行补充写入程序目录 custom_system_prompt.txt；硬安全句「只建议、不代按」始终追加在最后，无法去掉。
+        单行短补充也可在下方 schema 的「自定义提示词」里填。
+      </div>
+      <textarea id="promptOverlay" rows="5" style="width:100%;background:#0d0f13;border:1px solid var(--line);color:var(--txt);padding:8px;border-radius:6px;font:12px/1.45 ui-monospace,Consolas,monospace;"
+        placeholder="例：回答时优先提醒胎温与油量。"></textarea>
+      <div class="row2" style="margin-top:6px;">
+        <button id="promptSave" type="button" data-i18n="prompt.save">保存提示词</button>
+        <button id="promptClear" type="button" style="background:#232a36;color:var(--txt);" data-i18n="prompt.clear">清空文件</button>
+      </div>
+      <div class="meta" id="promptMsg"></div>
+    </details>
     <div class="row2" style="margin-top:6px;">
-      <button id="featSave" data-i18n="feat.save">保存开关</button>
-      <a href="http://127.0.0.1:8766" target="_blank"
+      <button id="featSave" data-i18n="feat.save">保存全部设置</button>
+      <a href="/settings" target="_blank"
          style="align-self:center;font-size:12px;color:var(--accent);text-decoration:none;" data-i18n="feat.full">
-         打开完整设置页(语音包 / 按键 / 高级) →</a>
+         同端口完整设置页 →</a>
     </div>
     <div class="meta" id="featMsg"></div>
   </div>
@@ -240,7 +254,7 @@ PAGE = r"""<!doctype html>
         <a href="#" id="langZh" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 8px;border-radius:8px;margin-left:6px;">中文</a>
         <a href="#" id="langEn" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 8px;border-radius:8px;margin-left:4px;">EN</a>
         <a href="#" id="openSet" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.ai">AI 设置</a>
-        <a href="#" id="openFeat" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.feat">功能设置</a>
+        <a href="#" id="openFeat" style="color:var(--dim);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:8px;margin-left:6px;" data-i18n="nav.feat">全部设置</a>
       </span>
     </h1>
     <div id="alertbar" style="display:none"></div>
@@ -292,15 +306,19 @@ const I18N = {
     "ai.preset_custom":"自定义…",
     "ai.stt":"🎙 语音识别（说话 → 文字）",
     "ai.stt_desc":"默认本地识别（faster-whisper，离线、免费、约需数秒）。想要亚秒级识别可接云端。",
-    "ai.stt_note":"本地模型大小 / 线程在【功能设置】里调；云端识别改动需重启语音模式生效。",
+    "ai.stt_note":"本地模型大小 / 线程在【全部设置】里调；云端识别改动需重启语音模式生效。",
     "ai.stt_base":"识别接口地址（https://...）", "ai.stt_model":"识别模型（如 SenseVoiceSmall）",
     "ai.stt_key":"识别 API Key（本地识别不用填）",
     "ai.stt_none":"本地识别（默认 · 离线免费）", "ai.stt_sf":"硅基流动 SenseVoice（中文最快，推荐）",
     "ai.stt_oai":"OpenAI Whisper", "ai.stt_custom":"自定义云端…",
     "ai.stt_saved":"；语音识别已保存（重启语音模式生效）", "ai.stt_err":"；语音识别保存失败：{e}",
-    "feat.title":"功能设置", "feat.hint":"主动播报 / 语音 / 推演 / 复盘 —— 改这里立即生效并写入 .env（部分项需重启）。",
-    "feat.save":"保存开关", "feat.full":"打开完整设置页(语音包 / 按键 / 高级) →",
+    "feat.title":"全部设置", "feat.hint":"遥测相关 / 语音耳麦 / PTT 按键 / 语音包 / 主动播报 / 推演 / 复盘 / AI —— 本页即主设置入口，保存写入 .env（部分项需重启）。",
+    "feat.save":"保存全部设置", "feat.full":"同端口完整设置页 →",
     "feat.saving":"保存中…", "feat.saved":"✓ 已保存并生效", "feat.partial":"部分失败：",
+    "prompt.title":"✏️ 自定义 AI 提示词（叠在内置之上）",
+    "prompt.hint":"多行补充写入程序目录 custom_system_prompt.txt；硬安全句「只建议、不代按」始终追加在最后，无法去掉。单行短补充也可在下方「自定义提示词」里填。",
+    "prompt.save":"保存提示词", "prompt.clear":"清空文件",
+    "prompt.saved":"✓ 提示词已保存", "prompt.cleared":"✓ 已清空自定义提示词文件", "prompt.err":"保存失败：{e}",
     "audio.title":"🎤🔊 语音设备（默认跟随系统正在使用的设备）",
     "audio.mic":"麦克风", "audio.spk":"播报输出", "audio.refresh":"🔄 重新检测设备",
     "audio.note":"默认自动使用系统当前设备——换耳机、换电脑无需改配置，拔插/切换默认设备后下一次语音即生效（也可在此固定）。",
@@ -310,7 +328,7 @@ const I18N = {
     "udp.body":"游戏 <b>设置 → UDP 遥测</b>：<br>• UDP 遥测：<code>开启</code><br>• UDP IP：<code>127.0.0.1</code>　• UDP 端口：<code>20777</code><br>• UDP 赛制：<code>2026</code>（或与你游戏版本一致）<br>• <b>“你的遥测”保持 <code>受限</code></b> —— 改后可能收不到数据，需重启游戏。",
     "panel.telemetry":"遥测面板", "panel.board":"全场排名", "panel.radio":"车队无线电",
     "conn.wait":"等待数据", "conn.live":"比赛中",
-    "nav.ai":"AI 设置", "nav.feat":"功能设置", "nav.exportTxt":"导出TXT", "nav.exportJson":"导出JSON",
+    "nav.ai":"AI 设置", "nav.feat":"全部设置", "nav.exportTxt":"导出TXT", "nav.exportJson":"导出JSON",
     "ask.ph":"问点什么…（例：我圈速多少）", "ask.send":"问", "ask.voicehint":"🎤 按住说话 · 松开发送 · Esc 取消", "ask.enter":"快捷键: Enter 发送",
     "q.lap":"圈速差", "q.tyre":"轮胎", "q.fuel":"油量", "q.pos":"位置", "q.loss":"损失时间",
     "meta.packets":"已收 {a} 包 · 丢 {d} · 错误 {e}",
@@ -335,15 +353,19 @@ const I18N = {
     "ai.preset_custom":"Custom…",
     "ai.stt":"🎙 Speech-to-text (your voice → text)",
     "ai.stt_desc":"Local faster-whisper by default (offline, free, a few seconds). Cloud APIs give sub-second results.",
-    "ai.stt_note":"Local model size / threads live in [Feature settings]; cloud STT changes need a voice-mode restart.",
+    "ai.stt_note":"Local model size / threads live in [All settings]; cloud STT changes need a voice-mode restart.",
     "ai.stt_base":"STT base URL (https://...)", "ai.stt_model":"STT model (e.g. SenseVoiceSmall)",
     "ai.stt_key":"STT API key (not needed for local)",
     "ai.stt_none":"Local recognition (default · offline & free)", "ai.stt_sf":"SiliconFlow SenseVoice (fastest for Chinese)",
     "ai.stt_oai":"OpenAI Whisper", "ai.stt_custom":"Custom cloud…",
     "ai.stt_saved":"; STT saved (restart voice mode to apply)", "ai.stt_err":"; STT save failed: {e}",
-    "feat.title":"Feature settings", "feat.hint":"Radio / voice / race model / debrief — saved to .env and applied live (some need a restart).",
-    "feat.save":"Save", "feat.full":"Open full settings page (voice / keys / advanced) →",
+    "feat.title":"All settings", "feat.hint":"Telemetry / headset / PTT / voice packs / radio / race model / debrief / AI — this panel is the primary settings surface; saves to .env (some need a restart).",
+    "feat.save":"Save all settings", "feat.full":"Full settings page (same port) →",
     "feat.saving":"Saving…", "feat.saved":"✓ Saved", "feat.partial":"Some failed: ",
+    "prompt.title":"✏️ Custom AI prompt (overlay)",
+    "prompt.hint":"Multi-line overlay is stored as custom_system_prompt.txt next to .env. The safety line (advise only, never press keys) is always appended last. A short one-line overlay also lives in the schema field below.",
+    "prompt.save":"Save prompt", "prompt.clear":"Clear file",
+    "prompt.saved":"✓ Prompt saved", "prompt.cleared":"✓ Custom prompt file cleared", "prompt.err":"Save failed: {e}",
     "audio.title":"🎤🔊 Audio devices (default: follow the system device)",
     "audio.mic":"Microphone", "audio.spk":"Speaker", "audio.refresh":"🔄 Re-scan devices",
     "audio.note":"By default the current system device is used — plugging/switching the default takes effect on the next voice take (you can also pin one here).",
@@ -353,7 +375,7 @@ const I18N = {
     "udp.body":"Game <b>Settings → UDP Telemetry</b>:<br>• UDP Telemetry: <code>On</code><br>• UDP IP: <code>127.0.0.1</code>　• UDP Port: <code>20777</code><br>• UDP Format: <code>2026</code> (match your game)<br>• Keep <b>“Your Telemetry” = <code>Restricted</code></b> — changing it may break reception; restart the game.",
     "panel.telemetry":"Telemetry", "panel.board":"Leaderboard", "panel.radio":"Team radio",
     "conn.wait":"waiting", "conn.live":"LIVE",
-    "nav.ai":"AI settings", "nav.feat":"Features", "nav.exportTxt":"Export TXT", "nav.exportJson":"Export JSON",
+    "nav.ai":"AI settings", "nav.feat":"All settings", "nav.exportTxt":"Export TXT", "nav.exportJson":"Export JSON",
     "ask.ph":"Ask something… (e.g. what's my lap time)", "ask.send":"Ask", "ask.voicehint":"🎤 Hold to talk · release to send · Esc to cancel", "ask.enter":"Shortcut: Enter to send",
     "q.lap":"Lap delta", "q.tyre":"Tyres", "q.fuel":"Fuel", "q.pos":"Position", "q.loss":"Time lost",
     "meta.packets":"rx {a} · dropped {d} · errors {e}",
@@ -626,7 +648,29 @@ function showPanel(id){
 document.getElementById("setupClose").onclick = (ev) => { ev.preventDefault(); setupDismissed = true; showPanel(""); };
 document.getElementById("featClose").onclick = (ev) => { ev.preventDefault(); showPanel(""); };
 document.getElementById("openSet").onclick = (ev) => { ev.preventDefault(); setupDismissed = true; showPanel("setup"); window.scrollTo(0,0); };
-document.getElementById("openFeat").onclick = (ev) => { ev.preventDefault(); showPanel("featBox"); loadFeatures(); loadAudio(); window.scrollTo(0,0); };
+document.getElementById("openFeat").onclick = (ev) => { ev.preventDefault(); showPanel("featBox"); loadFeatures(); loadAudio(); loadPromptOverlay(); window.scrollTo(0,0); };
+async function loadPromptOverlay(){
+  try {
+    const r = await fetch("/api/prompt_overlay"); const d = await r.json();
+    const el = document.getElementById("promptOverlay");
+    if (el) el.value = d.text || "";
+  } catch(e){}
+}
+async function savePromptOverlay(clear){
+  const msg = document.getElementById("promptMsg");
+  const el = document.getElementById("promptOverlay");
+  msg.className = "meta"; msg.textContent = t("feat.saving");
+  try {
+    const body = clear ? {text: ""} : {text: (el && el.value) || ""};
+    const r = await fetch("/api/prompt_overlay", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error){ msg.className = "meta bad"; msg.textContent = t("prompt.err", {e:d.error}); return; }
+    if (el) el.value = d.text || "";
+    msg.className = "meta ok"; msg.textContent = clear ? t("prompt.cleared") : t("prompt.saved");
+  } catch(e){ msg.className = "meta bad"; msg.textContent = t("prompt.err", {e:e}); }
+}
+document.getElementById("promptSave").onclick = () => savePromptOverlay(false);
+document.getElementById("promptClear").onclick = () => savePromptOverlay(true);
 document.getElementById("langZh").onclick = (ev) => { ev.preventDefault(); setLang('zh'); };
 document.getElementById("langEn").onclick = (ev) => { ev.preventDefault(); setLang('en'); };
 // ---- feature toggles (schema-driven) ----
@@ -1013,12 +1057,18 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             self._send(403, b"forbidden host", "text/plain")
             return
-        if self.path in ("/api/settings", "/api/export", "/api/export_txt") \
+        if self.path in ("/api/settings", "/api/export", "/api/export_txt",
+                           "/api/schema", "/api/prompt_overlay", "/settings") \
                 and not self._local_only():
             self._send_json(403, {"error": "this endpoint is local-only"})
             return
         if self.path == "/" or self.path.startswith("/index"):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/settings" or self.path.startswith("/settings?"):
+            # Same-port full settings page (schema-driven twin of FI.py --config).
+            from config_ui import _page as _settings_page
+            self._send(200, _settings_page().encode("utf-8"),
+                       "text/html; charset=utf-8")
         elif self.path == "/api/state":
             ctx = self.server.ctx  # type: ignore[attr-defined]
             snap = ctx["state"].snapshot()
@@ -1080,6 +1130,15 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/settings":
             from config_ui import _settings_payload
             self._send_json(200, {"settings": _settings_payload()})
+        elif self.path == "/api/schema":
+            from config_ui import _settings_payload, _groups_payload
+            self._send_json(200, {"settings": _settings_payload(),
+                                  "groups": _groups_payload()})
+        elif self.path == "/api/prompt_overlay":
+            from prompts import _read_custom_prompt_file, CUSTOM_PROMPT_FILENAME
+            self._send_json(200, {"text": _read_custom_prompt_file(),
+                                  "file": CUSTOM_PROMPT_FILENAME,
+                                  "safety": "advise only, never press keys"})
         elif self.path == "/api/voices":
             from voices import list_voices
             try:
@@ -1145,7 +1204,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(403, b"forbidden origin", "text/plain")
             return
         if self.path in ("/api/llm", "/api/audio", "/api/settings", "/api/bind",
-                         "/api/profile", "/api/ask", "/api/ask_voice") \
+                         "/api/profile", "/api/ask", "/api/ask_voice",
+                         "/api/prompt_overlay") \
                 and not self._local_only():
             self._send_json(403, {"error": "this endpoint is local-only"})
             return
@@ -1163,6 +1223,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/settings":
             self._set_settings()
+            return
+        if self.path == "/api/prompt_overlay":
+            self._set_prompt_overlay()
             return
         if self.path == "/api/bind":
             self._bind()
@@ -1261,6 +1324,26 @@ class _Handler(BaseHTTPRequestHandler):
             return
         from config_ui import apply_settings
         self._send_json(200, apply_settings(body))
+
+    def _set_prompt_overlay(self) -> None:
+        """POST /api/prompt_overlay - write/clear custom_system_prompt.txt."""
+        body = self._read_json()
+        if body is None:
+            return
+        raw = body.get("text", "") if isinstance(body, dict) else ""
+        try:
+            from prompts import (write_custom_prompt_file, _read_custom_prompt_file,
+                                 CUSTOM_PROMPT_FILENAME, SAFETY_LINE)
+            write_custom_prompt_file(str(raw or ""))
+            self._send_json(200, {
+                "text": _read_custom_prompt_file(),
+                "file": CUSTOM_PROMPT_FILENAME,
+                "safety": SAFETY_LINE,
+            })
+        except ValueError as e:
+            self._send_json(400, {"error": str(e)})
+        except OSError as e:
+            self._send_json(500, {"error": str(e)})
 
     def _bind(self) -> None:
         """POST /api/bind - capture the next key press as a PTT binding.

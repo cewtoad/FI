@@ -90,17 +90,24 @@ def _audio_payload() -> Dict[str, Any]:
 def _page() -> str:
     return """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>F1 Race Engineer 设置</title><style>
-body{font-family:system-ui,Segoe UI,sans-serif;max-width:860px;margin:20px auto;padding:0 16px}
-h2{border-bottom:1px solid #ddd;padding-top:14px}
+:root{--bg:#0f1115;--panel:#171a21;--line:#2a2f3a;--txt:#e6e9ef;--dim:#8a93a6;--accent:#4ea1ff}
+body{font-family:system-ui,Segoe UI,sans-serif;max-width:860px;margin:20px auto;padding:0 16px;
+     background:var(--bg);color:var(--txt)}
+h1{font-size:20px;margin:0 0 8px}
+h2{border-bottom:1px solid var(--line);padding-top:14px;color:var(--accent);font-size:14px}
 .row{display:flex;gap:10px;align-items:center;margin:8px 0}
-label{flex:0 0 280px;font-size:14px}
-.hint{color:#888;font-size:12px;margin-top:2px}
-input,select{flex:1;padding:5px 8px}
-button{padding:6px 14px;margin-top:12px}
-.msg{margin-left:10px;color:#1a7f37}
-.err{color:#c00}
+label{flex:0 0 280px;font-size:14px;color:var(--dim)}
+.hint{color:var(--dim);font-size:12px;margin-top:2px}
+input,select{flex:1;padding:7px 8px;background:#0d0f13;border:1px solid var(--line);
+            color:var(--txt);border-radius:6px}
+button{padding:8px 16px;margin-top:12px;background:var(--accent);border:none;color:#04121f;
+       font-weight:600;border-radius:8px;cursor:pointer}
+.msg{margin-left:10px;color:#6ee787}
+.err{color:#e77}
 .lang{float:right;font-size:13px}
-.lang a{color:#06c;text-decoration:none;margin-left:8px}
+.lang a{color:var(--accent);text-decoration:none;margin-left:8px}
+.banner{font-size:12px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+        border-radius:8px;padding:8px 10px;margin:8px 0 14px}
 #tip{position:fixed;display:none;pointer-events:none;z-index:9999;max-width:380px;
      background:#0b1218;color:#e6edf3;border:1px solid #2a3542;padding:7px 10px;
      border-radius:8px;font-size:12px;line-height:1.55;box-shadow:0 4px 16px rgba(0,0,0,.5)}
@@ -109,20 +116,20 @@ button{padding:6px 14px;margin-top:12px}
 <div id="tip"></div>
 <h1>F1 Race Engineer 设置 <span class="lang">
   <a href="#" id="zh">中文</a><a href="#" id="en">English</a></span></h1>
-<p class="hint" id="tipLine">保存后写入 .env；运行中的进程会自动热加载。</p>
+<p class="banner" id="tipLine">保存后写入 .env；运行中的进程会自动热加载。网页模式下也可打开本页：主面板「全部设置」或 /settings（与 FI.py --config 同一套 schema）。</p>
 <div id="form"></div>
 <button id="saveBtn" onclick="save()">保存</button><span id="msg" class="msg"></span>
 <script>
 let schema=[], groups={}, voices=null;
 let LANG = localStorage.getItem('f1tr_lang') || 'zh';
 const T = {
-  zh:{tip:'保存后写入 .env；运行中的进程会自动热加载。', save:'保存', saved:'已保存',
+  zh:{tip:'保存后写入 .env；运行中热加载。网页主面板「全部设置」与本页同一 schema（也可 /settings）。', save:'保存', saved:'已保存',
       partial:'部分失败: ', restart:' · 需重启', on:'开', off:'关',
       auto:'（自动）', bind:'⌨ 按键绑定', bindWait:'请按一下要绑定的键…',
       bindOk:'✓ 已识别：', bindNone:'没检测到按键（超时）',
       follow:'跟随系统当前设备', rescan:'🔄 重新检测', missing:'（未检测到）',
       sysdefault:'系统默认'},
-  en:{tip:'Saved to .env; the running app hot-reloads it.', save:'Save', saved:'Saved',
+  en:{tip:'Saved to .env; hot-reloads live. Same schema as the web All-settings panel (also /settings).', save:'Save', saved:'Saved',
       partial:'Some failed: ', restart:' · restart', on:'On', off:'Off',
       auto:'(auto)', bind:'⌨ Bind key', bindWait:'Press the key to bind…',
       bindOk:'✓ Detected: ', bindNone:'No key detected (timeout)',

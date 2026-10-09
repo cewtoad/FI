@@ -61,6 +61,13 @@ SCHEMA: Tuple[Setting, ...] = (
     Setting("PROFILE", "enum", "standard", "ai", "回答档位", "fast=一句话；standard=默认；deep=可给策略权衡（更长更慢）",
             "Answer profile", "fast=one line; standard=default; deep=strategy talk (longer)",
             choices=("fast", "standard", "deep")),
+    Setting("CUSTOM_SYSTEM_PROMPT", "str", "", "ai", "自定义提示词（一行）",
+            "叠在内置工程师提示词之上的短补充（.env 单行）；多行请用程序目录下 custom_system_prompt.txt。"
+            "硬安全句「只建议、不代按」始终追加在最后，无法去掉",
+            "Custom prompt (one line)",
+            "Short overlay on top of the built-in engineer prompt; for multi-line use "
+            "custom_system_prompt.txt next to .env. The safety line "
+            "(advise only, never press keys) is always appended last."),
     Setting("LLM_TIMEOUT", "float", 30.0, "ai", "LLM 超时（秒）", "单次请求最长等待；超时会改用备用端点或报错",
             "LLM timeout (s)", "Max wait per request; on timeout it falls back or errors",
             min_value=1.0, max_value=300.0, restart_required=True),
